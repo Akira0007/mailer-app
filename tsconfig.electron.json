@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "outDir": "./dist-electron",
+    "rootDir": "./src",
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "skipLibCheck": true,
+    "noEmit": false,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/main/**/*.ts", "src/shared/**/*.ts"]
+}

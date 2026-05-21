@@ -1,3 +1,41 @@
+.ping-card {
+  width: min(720px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 40px 32px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), transparent 70%),
+    var(--social-bg);
+  box-shadow: var(--shadow);
+}
+
+.eyebrow {
+  margin-bottom: 12px;
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.lead {
+  max-width: 52ch;
+  margin: 0 auto 24px;
+  color: var(--text);
+}
+
+.result {
+  margin-top: 18px;
+  min-height: 1.5em;
+  color: var(--text-h);
+  font-size: 16px;
+}
+
+.counter:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .counter {
   font-size: 16px;
   padding: 5px 10px;

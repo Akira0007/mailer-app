@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# mailer-app
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+一个本地优先的 macOS Electron 邮件客户端 MVP。
 
-Currently, two official plugins are available:
+## 当前状态
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- 已完成安全版重构。
+- 代码结构已拆成 `src/main`、`src/renderer`、`src/shared`。
+- 已接通 `app.ping` 的 typed IPC 最小闭环。
+- `pnpm dev`、`pnpm build`、`pnpm lint` 已验证可用。
+- 当前仓库已推送到 GitHub。
 
-## React Compiler
+## 技术栈
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Electron
+- React
+- TypeScript
+- Vite
+- pnpm
 
-## Expanding the ESLint configuration
+## 开发启动
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+pnpm install
+pnpm dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 构建
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+pnpm build
 ```
+
+## 目录结构
+
+```text
+src/
+  main/       Electron 主进程和 preload
+  renderer/   React UI
+  shared/     共享类型和纯函数
+docs/memory/  项目记忆和协作上下文
+```
+
+## 协作方式
+
+- Claude 负责具体代码执行。
+- Codex 负责 review、bug 修复和风险检查。
+- Google AI Studio 负责 UI 视觉方向。
+
+## 说明
+
+这是邮件群发客户端的早期 MVP，不包含 App Store、IAP、CRM、云同步和大规模真实群发。

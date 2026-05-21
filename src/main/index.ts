@@ -1,10 +1,21 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { IPC_CHANNELS, type AppPingResult } from '../shared/ipc-api.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = path.join(currentDir, 'preload.js');
 const rendererIndexPath = path.join(currentDir, '../../dist/index.html');
+
+function registerIpcHandlers() {
+  ipcMain.handle(IPC_CHANNELS.appPing, (): AppPingResult => {
+    return {
+      message: 'pong',
+      receivedAt: Date.now(),
+    };
+  });
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -13,7 +24,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
       preload: preloadPath,
     },
   });
@@ -30,6 +41,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerIpcHandlers();
   createWindow();
 
   app.on('activate', () => {

@@ -17,6 +17,7 @@
 - 完整 CRUD + 测试连接（nodemailer verify）
 - 加密密码存储（Electron safeStorage）
 - 免费版 1 个账号限制
+- 单封邮件发送：`smtpAccounts:sendSingle`（基于已保存账号发信）
 
 **products 模块**：
 - CSV 导入 + 列表查询
@@ -37,6 +38,7 @@
 
 - 发送队列尚未实现（目前还没有真正的批量发送执行闭环）
 - 发件账号轮转策略尚未实现
+- 单封发送目前是纯文本正文（未接 HTML 模板）
 - `rolldown` 原生绑定签名问题偶发（当前构建可通过）
 
 ### 环境变量（运行时需要）

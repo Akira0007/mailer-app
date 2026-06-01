@@ -21,6 +21,8 @@ const api: IpcApi = {
     delete: (id) => ipcRenderer.invoke(IPC_CHANNELS.smtpAccountsDelete, id),
     testConnection: (input) =>
       ipcRenderer.invoke(IPC_CHANNELS.smtpAccountsTestConnection, input),
+    sendSingle: (input) =>
+      ipcRenderer.invoke(IPC_CHANNELS.smtpAccountsSendSingle, input),
   },
   products: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.productsList),

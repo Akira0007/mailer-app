@@ -1,4 +1,5 @@
 import type {
+  SendSingleEmailInput,
   SenderAccountCreateInput,
   SenderAccountUpdateInput,
   TestConnectionInput,
@@ -140,5 +141,25 @@ export function validateTestConnectionInput(
     username: trimRequiredText(input.username, 'SMTP username'),
     password: trimRequiredText(input.password, 'SMTP password'),
     useTls: Boolean(input.useTls),
+  };
+}
+
+export function validateSendSingleEmailInput(
+  input: SendSingleEmailInput,
+): SendSingleEmailInput {
+  const accountId = trimRequiredText(input.accountId, 'Sender account id');
+  const toResult = validateEmail(input.to);
+  if (!toResult.ok) {
+    throw new Error(`Recipient email invalid: ${toResult.message}`);
+  }
+
+  const subject = trimRequiredText(input.subject, 'Email subject');
+  const body = trimRequiredText(input.body, 'Email body');
+
+  return {
+    accountId,
+    to: toResult.normalized,
+    subject,
+    body,
   };
 }

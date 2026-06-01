@@ -17,12 +17,14 @@ import type {
   ImportPreviewResult,
   ImportResult,
   ProductImportRow,
+  SendSingleEmailInput,
   SenderAccountCreateInput,
   SenderAccountUpdateInput,
   TestConnectionInput,
 } from '../shared/types.js';
 import {
   normalizeOptionalText,
+  validateSendSingleEmailInput,
   validateTestConnectionInput,
   validateEmail,
 } from '../shared/validation.js';
@@ -34,8 +36,8 @@ import {
   InMemorySmtpAccountsRepository,
   type SmtpAccountsRepository,
 } from './smtp-accounts-repository.js';
-import { SafeStorageCredentialStore } from './credential-store.js';
-import { testSmtpConnection } from './smtp-connection.js';
+import { SafeStorageCredentialStore, type CredentialStore } from './credential-store.js';
+import { sendSingleEmail, testSmtpConnection } from './smtp-connection.js';
 import {
   InMemoryProductsRepository,
   type ProductsRepository,
@@ -49,6 +51,7 @@ const preloadPath = path.join(currentDir, 'preload.js');
 const rendererIndexPath = path.join(currentDir, '../../dist/index.html');
 let contactsRepo: ContactsRepository | null = null;
 let smtpAccountsRepo: SmtpAccountsRepository | null = null;
+let smtpCredentialStore: CredentialStore | null = null;
 let productsRepo: ProductsRepository | null = null;
 let enrichmentService: EnrichmentService | null = null;
 let enrichmentDisabledReason: string | null = null;
@@ -67,6 +70,14 @@ function getSmtpAccountsRepo(): SmtpAccountsRepository {
   }
 
   return smtpAccountsRepo;
+}
+
+function getSmtpCredentialStore(): CredentialStore {
+  if (!smtpCredentialStore) {
+    throw new Error('SMTP credential store not initialized.');
+  }
+
+  return smtpCredentialStore;
 }
 
 function getProductsRepo(): ProductsRepository {
@@ -285,6 +296,20 @@ function registerIpcHandlers() {
     },
   );
 
+  ipcMain.handle(
+    IPC_CHANNELS.smtpAccountsSendSingle,
+    async (_event, input: SendSingleEmailInput) => {
+      const validated = validateSendSingleEmailInput(input);
+      const account = getSmtpAccountsRepo().findById(validated.accountId);
+      if (!account) {
+        throw new Error(`Sender account not found: ${validated.accountId}`);
+      }
+
+      const decryptedPassword = getSmtpCredentialStore().decrypt(account.encryptedPassword);
+      return sendSingleEmail(account, decryptedPassword, validated);
+    },
+  );
+
   ipcMain.handle(IPC_CHANNELS.productsList, () => getProductsRepo().list());
 
   ipcMain.handle(
@@ -354,6 +379,7 @@ async function initContactsRepository() {
 
 function initSmtpAccountsRepository() {
   const credentialStore = new SafeStorageCredentialStore();
+  smtpCredentialStore = credentialStore;
   smtpAccountsRepo = new InMemorySmtpAccountsRepository(credentialStore);
 }
 

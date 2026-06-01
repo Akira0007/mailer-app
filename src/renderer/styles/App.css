@@ -648,6 +648,10 @@ body.is-resizing * {
   margin-bottom: 8px;
 }
 
+.smtp-form-row-column {
+  flex-direction: column;
+}
+
 .smtp-port-select {
   max-width: 100px;
 }
@@ -656,6 +660,11 @@ body.is-resizing * {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.smtp-body-textarea {
+  min-height: 140px;
+  margin: 0;
 }
 
 .smtp-success {

@@ -19,6 +19,7 @@ Phase 2 起步：发送队列（持久化 + 可暂停/恢复）与多账号轮�
 - **smtpAccounts 模块**：main/preload/UI 骨架接通 ✅
 - **smtpAccounts 模块**：输入校验 + 免费版 1 个账号限制 ✅
 - **smtpAccounts 模块**：测试连接升级为 `nodemailer.verify()` ✅
+- **smtpAccounts 模块**：单封邮件发送闭环（账号选择 + 收件人 + 主题 + 正文）✅
 - **products 模块**：shared 类型、IPC 合同 ✅
 - **products 模块**：InMemory 仓储（导入产品列表）✅
 - **products 模块**：main/preload/UI 骨架（CSV 导入 + 表格展示）✅
@@ -37,7 +38,7 @@ Phase 2 起步：发送队列（持久化 + 可暂停/恢复）与多账号轮�
 
 1. **发送队列**：设计 queue task schema + SQLite 持久化 + 可暂停/恢复
 2. **发件账号轮转**：多账号权重/轮询策略（按账号可用性、失败回退）
-3. **发送执行器**：打通 SMTP 账号池 + 队列任务执行 + 基础重试
+3. **发送执行器**：将“单封发送”能力接入队列任务执行 + 基础重试
 4. **统计基础**：投递结果落库（成功/失败/时间）供 Reports 使用
 
 ## 环境变量

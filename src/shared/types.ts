@@ -140,6 +140,21 @@ export interface TestConnectionResult {
   message: string;
 }
 
+export interface SendSingleEmailInput {
+  accountId: SenderAccountId;
+  to: string;
+  subject: string;
+  body: string;
+}
+
+export interface SendSingleEmailResult {
+  ok: boolean;
+  messageId: string | null;
+  acceptedCount: number;
+  rejectedCount: number;
+  response: string;
+}
+
 export type ProductId = string;
 
 export interface Product {

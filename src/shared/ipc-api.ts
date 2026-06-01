@@ -10,6 +10,8 @@ import type {
   PaginatedResult,
   Product,
   ProductImportRow,
+  SendSingleEmailInput,
+  SendSingleEmailResult,
   SenderAccountCreateInput,
   SenderAccountUpdateInput,
   SenderAccountView,
@@ -28,6 +30,7 @@ export const IPC_CHANNELS = {
   smtpAccountsUpdate: 'smtpAccounts:update',
   smtpAccountsDelete: 'smtpAccounts:delete',
   smtpAccountsTestConnection: 'smtpAccounts:testConnection',
+  smtpAccountsSendSingle: 'smtpAccounts:sendSingle',
   productsList: 'products:list',
   productsImportCsv: 'products:importCsv',
 } as const;
@@ -54,6 +57,7 @@ export interface SmtpAccountsIpcApi {
   update(input: SenderAccountUpdateInput): Promise<SenderAccountView>;
   delete(id: string): Promise<void>;
   testConnection(input: TestConnectionInput): Promise<TestConnectionResult>;
+  sendSingle(input: SendSingleEmailInput): Promise<SendSingleEmailResult>;
 }
 
 export interface ProductsIpcApi {

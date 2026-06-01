@@ -27,9 +27,13 @@ docs/memory/
 - `pnpm dev` 已验证可用
 - `pnpm build` 已验证可用
 - `pnpm lint` 已验证可用
+- Contacts / SMTP / Products / Reports 基础模块已接通
+- AI enrichment 已接通到“网站分析 → 产品匹配 → 邮件草稿”
+- 五个主页面统一四栏可拖拽布局
 
 ## 目前优先级
 
-1. 先把最小的 typed IPC 做出来
-2. 再补联系人导入、SMTP、发送队列
-3. 后面再考虑模板、签名、AI 和付费能力
+1. 发送队列（持久化、暂停/恢复）
+2. 多 SMTP 账号轮转策略
+3. 真实发送执行与结果落库
+4. 再扩展模板编辑、统计、付费能力

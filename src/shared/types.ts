@@ -32,10 +32,25 @@ export interface ContactEnrichment {
   targetMarkets: string[];
   possibleNeeds: string[];
   disqualifiedReasons: string[];
+  matchedProducts: EnrichmentProductMatch[];
+  emailDraft: EnrichmentEmailDraft | null;
   confidence: number;
   status: EnrichmentStatus;
   errorMessage: string | null;
   enrichedAt: TimestampMs | null;
+}
+
+export interface EnrichmentProductMatch {
+  productId: string;
+  productName: string;
+  matchReason: string;
+  confidence: number;
+}
+
+export interface EnrichmentEmailDraft {
+  subject: string;
+  body: string;
+  generatedAt: TimestampMs;
 }
 
 export interface EnrichContactInput {

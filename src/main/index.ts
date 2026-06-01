@@ -1,6 +1,9 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { app, BrowserWindow, ipcMain } from 'electron';
+import type { Database as SqlJsDatabase } from 'sql.js';
 
 import {
   IPC_CHANNELS,
@@ -330,8 +333,19 @@ function createWindow() {
 async function initContactsRepository() {
   const dbPath = path.join(app.getPath('userData'), 'flow-sender.db');
   try {
+    const initSqlJs = (await import('sql.js')).default;
+    const SQL = await initSqlJs();
+
+    let sqlJsDb: SqlJsDatabase;
+    if (existsSync(dbPath)) {
+      const buffer = readFileSync(dbPath);
+      sqlJsDb = new SQL.Database(buffer);
+    } else {
+      sqlJsDb = new SQL.Database();
+    }
+
     const { ContactsSqliteRepository } = await import('./contacts-repository-sqlite.js');
-    contactsRepo = new ContactsSqliteRepository(dbPath);
+    contactsRepo = new ContactsSqliteRepository(dbPath, sqlJsDb);
   } catch (error) {
     console.error('[contacts] sqlite init failed, fallback to in-memory repository.', error);
     contactsRepo = new InMemoryContactsRepository();
@@ -363,6 +377,7 @@ function initEnrichmentService() {
   const llmClient = new ClaudeLlmClient(anthropicApiKey);
   enrichmentService = new EnrichmentService(
     getContactsRepo(),
+    getProductsRepo(),
     websiteFetcher,
     llmClient,
   );

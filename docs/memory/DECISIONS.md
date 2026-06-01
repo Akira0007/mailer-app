@@ -30,3 +30,12 @@ MVP 阶段不引入：
 ## D-005
 
 当前 Electron 窗口使用 `sandbox: false`，正式说明见 [docs/adr/0001-sandbox-false-for-ipc-ping.md](/Users/raul/Project/mailer-app/docs/adr/0001-sandbox-false-for-ipc-ping.md)。
+
+## D-006
+
+联系人 enrichment 完成后自动触发产品匹配与邮件草稿生成，结果存入 `Contact.enrichment`：
+
+- `matchedProducts[]`
+- `emailDraft`
+
+这样先形成“分析→推荐→草稿”的最小业务闭环，再进入发送队列阶段。

@@ -1,4 +1,5 @@
 import type { FetchedPage } from './website-fetcher.js';
+import type { EnrichmentProductMatch, Product } from '../../shared/types.js';
 
 export interface CustomerProfile {
   companyName: string | null;
@@ -11,13 +12,6 @@ export interface CustomerProfile {
   confidence: number;
 }
 
-export interface ProductMatch {
-  productId: string;
-  productName: string;
-  matchReason: string;
-  confidence: number;
-}
-
 export interface EmailDraft {
   subject: string;
   body: string;
@@ -25,8 +19,8 @@ export interface EmailDraft {
 
 export interface LlmClient {
   analyzeWebsite(pages: FetchedPage[]): Promise<CustomerProfile>;
-  matchProducts(profile: CustomerProfile, products: Array<{ id: string; name: string; category: string; description: string; tags: string[]; sellingPoints: string[]; targetUseCases: string[]; }>): Promise<ProductMatch[]>;
-  generateDraft(profile: CustomerProfile, matches: ProductMatch[]): Promise<EmailDraft>;
+  matchProducts(profile: CustomerProfile, products: Product[]): Promise<EnrichmentProductMatch[]>;
+  generateDraft(profile: CustomerProfile, matches: EnrichmentProductMatch[]): Promise<EmailDraft>;
 }
 
 const ANALYZE_SYSTEM_PROMPT = `You are a business analyst. Analyze the website content and extract structured business information.
@@ -84,13 +78,13 @@ export class ClaudeLlmClient implements LlmClient {
 
   async matchProducts(
     profile: CustomerProfile,
-    products: Array<{ id: string; name: string; category: string; description: string; tags: string[]; sellingPoints: string[]; targetUseCases: string[]; }>,
-  ): Promise<ProductMatch[]> {
+    products: Product[],
+  ): Promise<EnrichmentProductMatch[]> {
     const input = JSON.stringify({ profile, products }, null, 2);
     return this.callClaude(MATCH_SYSTEM_PROMPT, input);
   }
 
-  async generateDraft(profile: CustomerProfile, matches: ProductMatch[]): Promise<EmailDraft> {
+  async generateDraft(profile: CustomerProfile, matches: EnrichmentProductMatch[]): Promise<EmailDraft> {
     const input = JSON.stringify({ profile, matches }, null, 2);
     return this.callClaude(DRAFT_SYSTEM_PROMPT, input);
   }

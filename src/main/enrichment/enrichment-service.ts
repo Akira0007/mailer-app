@@ -1,27 +1,91 @@
 import {
   ENRICHMENT_STATUS,
   type Contact,
+  type EnrichmentEmailDraft,
+  type EnrichmentProductMatch,
   type ContactEnrichment,
   type EnrichContactResult,
 } from '../../shared/types.js';
 import type { ContactsRepository } from '../contacts-repository.js';
-import type { LlmClient } from './llm-client.js';
+import type { ProductsRepository } from '../products-repository.js';
+import type { CustomerProfile, LlmClient } from './llm-client.js';
 import type { WebsiteFetcher } from './website-fetcher.js';
 import { inferWebsiteUrl } from './website-fetcher.js';
 
 export class EnrichmentService {
   private readonly contactsRepo: ContactsRepository;
+  private readonly productsRepo: ProductsRepository;
   private readonly websiteFetcher: WebsiteFetcher;
   private readonly llmClient: LlmClient;
 
   constructor(
     contactsRepo: ContactsRepository,
+    productsRepo: ProductsRepository,
     websiteFetcher: WebsiteFetcher,
     llmClient: LlmClient,
   ) {
     this.contactsRepo = contactsRepo;
+    this.productsRepo = productsRepo;
     this.websiteFetcher = websiteFetcher;
     this.llmClient = llmClient;
+  }
+
+  private async matchProductsAndGenerateDraft(
+    profile: CustomerProfile,
+  ): Promise<{ matchedProducts: EnrichmentProductMatch[]; emailDraft: EnrichmentEmailDraft | null }> {
+    const activeProducts = this.productsRepo.list().filter((product) => product.isActive);
+    if (activeProducts.length === 0) {
+      return {
+        matchedProducts: [],
+        emailDraft: null,
+      };
+    }
+
+    const rawMatches = await this.llmClient.matchProducts(profile, activeProducts);
+    if (rawMatches.length === 0) {
+      return {
+        matchedProducts: [],
+        emailDraft: null,
+      };
+    }
+
+    const activeProductMap = new Map(activeProducts.map((product) => [product.id, product]));
+    const matchedProducts = rawMatches
+      .map((match) => {
+        const product = activeProductMap.get(match.productId);
+        if (!product) {
+          return null;
+        }
+
+        return {
+          productId: product.id,
+          productName: product.name,
+          matchReason: match.matchReason.trim(),
+          confidence: Math.min(Math.max(match.confidence, 0), 1),
+        } satisfies EnrichmentProductMatch;
+      })
+      .filter((item): item is EnrichmentProductMatch => item != null)
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, 3);
+
+    if (matchedProducts.length === 0) {
+      return {
+        matchedProducts: [],
+        emailDraft: null,
+      };
+    }
+
+    const draft = await this.llmClient.generateDraft(profile, matchedProducts);
+    const emailDraft: EnrichmentEmailDraft = {
+      subject: draft.subject.trim(),
+      body: draft.body.trim(),
+      generatedAt: Date.now(),
+    };
+
+    return {
+      matchedProducts,
+      emailDraft,
+    };
   }
 
   async enrichContact(contact: Contact): Promise<EnrichContactResult> {
@@ -34,6 +98,8 @@ export class EnrichmentService {
       targetMarkets: [],
       possibleNeeds: [],
       disqualifiedReasons: [],
+      matchedProducts: [],
+      emailDraft: null,
       confidence: 0,
       status: ENRICHMENT_STATUS.IN_PROGRESS,
       errorMessage: null,
@@ -57,6 +123,8 @@ export class EnrichmentService {
           targetMarkets: [],
           possibleNeeds: [],
           disqualifiedReasons: ['Public email provider — cannot infer website'],
+          matchedProducts: [],
+          emailDraft: null,
           confidence: 0,
           status: ENRICHMENT_STATUS.FAILED,
           errorMessage: 'Public email domain, cannot infer website URL',
@@ -78,6 +146,8 @@ export class EnrichmentService {
           targetMarkets: [],
           possibleNeeds: [],
           disqualifiedReasons: ['Website unreachable or no usable content found'],
+          matchedProducts: [],
+          emailDraft: null,
           confidence: 0,
           status: ENRICHMENT_STATUS.FAILED,
           errorMessage: 'Could not fetch any pages from website',
@@ -88,6 +158,18 @@ export class EnrichmentService {
       }
 
       const profile = await this.llmClient.analyzeWebsite(pages);
+      let matchedProducts: EnrichmentProductMatch[] = [];
+      let emailDraft: EnrichmentEmailDraft | null = null;
+
+      if (profile.confidence >= 0.3) {
+        try {
+          const generated = await this.matchProductsAndGenerateDraft(profile);
+          matchedProducts = generated.matchedProducts;
+          emailDraft = generated.emailDraft;
+        } catch (error) {
+          console.error('[enrichment] product matching or draft generation failed:', error);
+        }
+      }
 
       const result: ContactEnrichment = {
         websiteUrl,
@@ -98,6 +180,8 @@ export class EnrichmentService {
         targetMarkets: profile.targetMarkets,
         possibleNeeds: profile.possibleNeeds,
         disqualifiedReasons: profile.disqualifiedReasons,
+        matchedProducts,
+        emailDraft,
         confidence: profile.confidence,
         status: profile.confidence >= 0.3 ? ENRICHMENT_STATUS.DONE : ENRICHMENT_STATUS.FAILED,
         errorMessage: profile.confidence < 0.3
@@ -118,6 +202,8 @@ export class EnrichmentService {
         targetMarkets: [],
         possibleNeeds: [],
         disqualifiedReasons: [],
+        matchedProducts: [],
+        emailDraft: null,
         confidence: 0,
         status: ENRICHMENT_STATUS.FAILED,
         errorMessage: error instanceof Error ? error.message : 'Unknown enrichment error',

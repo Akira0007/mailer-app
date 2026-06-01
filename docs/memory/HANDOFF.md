@@ -2,7 +2,7 @@
 
 ## 给下一个执行者
 
-项目已正常启动。Phase 1（AI 客户分析赋能层骨架）已完成。
+项目已正常启动。Phase 1（AI 客户分析赋能）已收尾，下一阶段进入发送队列与轮转。
 
 ### 已闭环模块
 
@@ -26,11 +26,18 @@
 - `src/main/enrichment/website-fetcher.ts` — JinaReaderFetcher + inferWebsiteUrl()
 - `src/main/enrichment/llm-client.ts` — ClaudeLlmClient（analyzeWebsite / matchProducts / generateDraft）
 - `src/main/enrichment/enrichment-service.ts` — 编排服务（infer → fetch → analyze → store）
+- enrich 完成后自动执行：`matchProductsAndGenerateDraft()`，并将推荐产品与邮件草稿写回 `contact.enrichment`
+
+**UI 布局**：
+- 五个主页面统一四栏（Sidebar / List / Main / Inspector）
+- 三个分割线均可拖拽
+- 窗口尺寸变化时自动收敛列宽，保持可用
 
 ### 当前阻塞
 
-- `better-sqlite3` 在 Electron ABI 下未重建成功（运行时已自动降级到 InMemory，不阻塞 UI）
-- `rolldown` 原生绑定签名问题（仅影响 Vite 打包，TypeScript 编译正常）
+- 发送队列尚未实现（目前还没有真正的批量发送执行闭环）
+- 发件账号轮转策略尚未实现
+- `rolldown` 原生绑定签名问题偶发（当前构建可通过）
 
 ### 环境变量（运行时需要）
 
@@ -39,10 +46,10 @@
 
 ### 建议接手顺序
 
-1. **产品匹配 + 草稿生成** — 在 enrichment-service.ts 中扩展，匹配后自动邮件草稿
-2. **发送队列** — SQLite 持久化 + 可暂停/恢复
-3. **发件账号轮转** — 多账号权重/轮询策略
-4. **解决原生模块编译** — better-sqlite3 / rolldown
+1. **发送队列** — SQLite 持久化 + 可暂停/恢复
+2. **发件账号轮转** — 多账号权重/轮询策略
+3. **发送执行器** — 队列任务消费 + SMTP 发信 + 重试
+4. **基础统计落库** — 为 Reports 提供真实数据
 
 ## 交接规则
 

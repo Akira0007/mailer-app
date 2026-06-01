@@ -16,13 +16,12 @@
   --shadow: rgba(15, 23, 42, 0.08);
 
   display: grid;
-  grid-template-columns: 240px 320px 1fr;
   min-height: 100vh;
   color: var(--text-main);
   background: var(--bg-app);
 }
 
-.workspace.layout-messages {
+.workspace.layout-four-pane {
   grid-template-columns:
     var(--pane-1, 250px)
     8px
@@ -132,7 +131,7 @@
   padding: 12px;
 }
 
-.workspace.layout-messages .pane {
+.workspace.layout-four-pane .pane {
   border-right: none;
 }
 
@@ -167,6 +166,10 @@ body.is-resizing * {
 }
 
 .pane-detail {
+  overflow: auto;
+}
+
+.pane-inspector {
   overflow: auto;
 }
 
@@ -582,6 +585,10 @@ body.is-resizing * {
   font-family: var(--mono);
 }
 
+.draft-textarea {
+  min-height: 180px;
+}
+
 .file-btn {
   position: relative;
   overflow: hidden;
@@ -679,7 +686,7 @@ body.is-resizing * {
 }
 
 @media (max-width: 1280px) {
-  .workspace.layout-messages {
+  .workspace.layout-four-pane {
     grid-template-columns:
       minmax(180px, var(--pane-1, 220px))
       6px
@@ -689,15 +696,6 @@ body.is-resizing * {
       6px
       minmax(220px, var(--pane-4, 280px));
     overflow-x: auto;
-  }
-
-  .workspace {
-    grid-template-columns: 220px 1fr;
-  }
-
-  .pane-detail {
-    grid-column: 1 / -1;
-    border-top: 1px solid var(--border);
   }
 
   .messages-layout {

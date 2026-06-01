@@ -1,2 +1,2 @@
-allowBuilds:
-  better-sqlite3: true
+# pnpm workspace config
+# better-sqlite3 replaced with sql.js (WASM-based, no native compilation needed)

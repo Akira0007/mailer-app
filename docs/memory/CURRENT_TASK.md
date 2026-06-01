@@ -2,7 +2,7 @@
 
 ## 当前任务
 
-Phase 1 收尾：AI 客户分析赋能层骨架已完成，下一步连接产品匹配 + 邮件草稿生成。
+Phase 2 起步：发送队列（持久化 + 可暂停/恢复）与多账号轮转。
 
 ## 已完成
 
@@ -29,14 +29,16 @@ Phase 1 收尾：AI 客户分析赋能层骨架已完成，下一步连接产品
 - **IPC 通道**：`contacts:enrich` 已注册 + preload 桥接 ✅
 - **ContactsRepository**：findById() + updateEnrichment() 双实现（InMemory + SQLite）✅
 - **UI**：联系人详情中 AI 分析面板（含查看/触发/重新分析按钮）✅
+- **AI enrichment 闭环**：分析完成后自动执行产品匹配 + 邮件草稿生成，并回写 enrichment ✅
+- **UI 布局**：Messages / Contacts / SMTP / Products / Reports 统一为四栏可拖拽，自适应宽度 ✅
 - 构建验证：TypeScript 编译通过（两个配置均通过）
 
 ## 下一步
 
-1. **产品匹配 + 草稿生成**：在 enrichment-service.ts 中添加 `matchProductsAndGenerateDraft()`，由 enrichContact() 完成后自动触发
-2. **发送队列**：SQLite 持久化 + 可暂停/恢复队列
-3. **发件账号轮转**：多账号权重/轮询策略
-4. **解决 `better-sqlite3`** Electron 原生模块编译问题
+1. **发送队列**：设计 queue task schema + SQLite 持久化 + 可暂停/恢复
+2. **发件账号轮转**：多账号权重/轮询策略（按账号可用性、失败回退）
+3. **发送执行器**：打通 SMTP 账号池 + 队列任务执行 + 基础重试
+4. **统计基础**：投递结果落库（成功/失败/时间）供 Reports 使用
 
 ## 环境变量
 

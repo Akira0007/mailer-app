@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 
 import type { AppPingResult } from '../shared/ipc-api.js';
 import {
@@ -25,7 +32,12 @@ type PrimaryView = 'messages' | 'contacts' | 'smtp' | 'products' | 'reports';
 type ReportTab = 'summary' | 'message' | 'recipients';
 type PingStatus = 'idle' | 'loading' | 'done' | 'error';
 
-const MIN_PANE_WIDTHS = [200, 240, 560, 260] as const;
+const DEFAULT_PANE_WIDTHS: [number, number, number, number] = [250, 360, 920, 320];
+const IDEAL_MIN_PANE_WIDTHS: [number, number, number, number] = [200, 240, 560, 260];
+const ABS_MIN_PANE_WIDTHS: [number, number, number, number] = [120, 150, 280, 160];
+const SPLITTER_WIDTH = 8;
+const SPLITTER_COUNT = 3;
+const TOTAL_SPLITTER_WIDTH = SPLITTER_WIDTH * SPLITTER_COUNT;
 
 const MESSAGE_LIST = [
   {
@@ -61,6 +73,17 @@ type SplitterDragState = {
   leftWidth: number;
   rightWidth: number;
 };
+
+type PaneLayout = {
+  pane2: ReactNode;
+  pane3: ReactNode;
+  pane4: ReactNode;
+  pane4ClassName?: string;
+};
+
+function sum(values: readonly number[]): number {
+  return values.reduce((acc, value) => acc + value, 0);
+}
 
 function formatPingTime(value: AppPingResult['receivedAt']) {
   return new Date(value).toLocaleString('zh-CN');
@@ -100,18 +123,83 @@ function parseTextareaRows(text: string): ContactImportRowInput[] {
     });
 }
 
+function getEffectiveMinPaneWidths(containerWidth: number): [number, number, number, number] {
+  const available = Math.max(containerWidth - TOTAL_SPLITTER_WIDTH, sum(ABS_MIN_PANE_WIDTHS));
+  const absTotal = sum(ABS_MIN_PANE_WIDTHS);
+  const idealTotal = sum(IDEAL_MIN_PANE_WIDTHS);
+
+  if (available <= absTotal) {
+    return ABS_MIN_PANE_WIDTHS;
+  }
+
+  if (available >= idealTotal) {
+    return IDEAL_MIN_PANE_WIDTHS;
+  }
+
+  const ratio = (available - absTotal) / (idealTotal - absTotal);
+
+  return IDEAL_MIN_PANE_WIDTHS.map((ideal, index) => {
+    const abs = ABS_MIN_PANE_WIDTHS[index];
+    return Math.round(abs + (ideal - abs) * ratio);
+  }) as [number, number, number, number];
+}
+
+function normalizePaneWidths(
+  input: [number, number, number, number],
+  containerWidth: number,
+): [number, number, number, number] {
+  const minimums = getEffectiveMinPaneWidths(containerWidth);
+  const available = Math.max(containerWidth - TOTAL_SPLITTER_WIDTH, sum(minimums));
+  const next = input.map((value, index) => Math.max(Math.round(value), minimums[index])) as [
+    number,
+    number,
+    number,
+    number,
+  ];
+
+  let total = sum(next);
+  if (total < available) {
+    next[2] += available - total;
+    return next;
+  }
+
+  if (total === available) {
+    return next;
+  }
+
+  let overflow = total - available;
+  const shrinkOrder: Array<0 | 1 | 2 | 3> = [1, 0, 3, 2];
+  for (const index of shrinkOrder) {
+    if (overflow <= 0) {
+      break;
+    }
+
+    const room = next[index] - minimums[index];
+    if (room <= 0) {
+      continue;
+    }
+
+    const delta = Math.min(room, overflow);
+    next[index] -= delta;
+    overflow -= delta;
+  }
+
+  total = sum(next);
+  if (total < available) {
+    next[2] += available - total;
+  }
+
+  return next;
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
   const [activeView, setActiveView] = useState<PrimaryView>('messages');
   const [activeReportTab, setActiveReportTab] = useState<ReportTab>('summary');
   const [activeMessageId, setActiveMessageId] = useState(MESSAGE_LIST[0]?.id ?? 'm1');
-  const [paneWidths, setPaneWidths] = useState<[number, number, number, number]>([
-    250,
-    360,
-    920,
-    320,
-  ]);
+  const [paneWidths, setPaneWidths] = useState<[number, number, number, number]>(DEFAULT_PANE_WIDTHS);
   const dragStateRef = useRef<SplitterDragState | null>(null);
+  const workspaceRef = useRef<HTMLElement | null>(null);
 
   const [pingStatus, setPingStatus] = useState<PingStatus>('idle');
   const [pingText, setPingText] = useState('还没有测试过');
@@ -157,18 +245,45 @@ function App() {
     return commitResult.errors.slice(0, 300);
   }, [commitResult]);
 
-  const messageLayoutStyle = useMemo(() => {
-    if (activeView !== 'messages') {
-      return undefined;
-    }
-
+  const workspaceStyle = useMemo(() => {
     return {
       '--pane-1': `${paneWidths[0]}px`,
       '--pane-2': `${paneWidths[1]}px`,
       '--pane-3': `${paneWidths[2]}px`,
       '--pane-4': `${paneWidths[3]}px`,
-    } as React.CSSProperties;
-  }, [activeView, paneWidths]);
+    } as CSSProperties;
+  }, [paneWidths]);
+
+  function getWorkspaceWidth() {
+    return workspaceRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+  }
+
+  useEffect(() => {
+    function fitToContainer(containerWidth?: number) {
+      const width = containerWidth ?? getWorkspaceWidth();
+      setPaneWidths((prev) => normalizePaneWidths(prev, width));
+    }
+
+    const element = workspaceRef.current;
+    if (!element) {
+      return undefined;
+    }
+
+    fitToContainer(element.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        fitToContainer(entry?.contentRect.width);
+      });
+      observer.observe(element);
+      return () => observer.disconnect();
+    }
+
+    const handleResize = () => fitToContainer();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   useEffect(() => {
     function handleMouseMove(event: MouseEvent) {
@@ -177,9 +292,11 @@ function App() {
         return;
       }
 
+      const containerWidth = getWorkspaceWidth();
+      const minPaneWidths = getEffectiveMinPaneWidths(containerWidth);
       const deltaX = event.clientX - drag.startX;
-      const leftMin = MIN_PANE_WIDTHS[drag.splitterIndex];
-      const rightMin = MIN_PANE_WIDTHS[drag.splitterIndex + 1];
+      const leftMin = minPaneWidths[drag.splitterIndex];
+      const rightMin = minPaneWidths[drag.splitterIndex + 1];
       const total = drag.leftWidth + drag.rightWidth;
       const nextLeft = clamp(drag.leftWidth + deltaX, leftMin, total - rightMin);
       const nextRight = total - nextLeft;
@@ -188,7 +305,7 @@ function App() {
         const next = [...prev] as [number, number, number, number];
         next[drag.splitterIndex] = Math.round(nextLeft);
         next[drag.splitterIndex + 1] = Math.round(nextRight);
-        return next;
+        return normalizePaneWidths(next, containerWidth);
       });
     }
 
@@ -341,7 +458,34 @@ function App() {
     await loadContacts(query);
   }
 
-  function renderMessagesMain() {
+  function renderMessagesPane2() {
+    return (
+      <>
+        <header className="pane-header">
+          <div>
+            <h2>Messages</h2>
+            <p className="pane-subtitle">Direct Mail Project</p>
+          </div>
+          <button className="ghost-btn" type="button">＋</button>
+        </header>
+        <div className="message-list">
+          {MESSAGE_LIST.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`message-item ${item.id === activeMessageId ? 'active' : ''}`}
+              onClick={() => setActiveMessageId(item.id)}
+            >
+              <span className="message-title">{item.title}</span>
+              <span className="message-date">{item.dateText}</span>
+            </button>
+          ))}
+        </div>
+      </>
+    );
+  }
+
+  function renderMessagesPane3() {
     return (
       <section className="messages-main">
         <div className="composer-toolbar">
@@ -379,9 +523,9 @@ function App() {
     );
   }
 
-  function renderMessagesInspector() {
+  function renderMessagesPane4() {
     return (
-      <aside className="pane messages-inspector">
+      <>
         <div className="inspector-section">
           <h4>Template</h4>
           <p className="inspector-name">Name · Getting Started</p>
@@ -405,145 +549,164 @@ function App() {
           <div className="color-row"><span>Button Text</span><input type="color" defaultValue="#ffffff" /></div>
           <div className="color-row"><span>Button Bg</span><input type="color" defaultValue="#f08c2f" /></div>
         </div>
-      </aside>
+      </>
     );
   }
 
-  function renderContactsDetail() {
+  function renderContactsPane2() {
     return (
-      <section className="pane pane-detail">
-        {selectedContact ? (
-          <>
-            <section className="panel">
-              <p className="eyebrow">当前联系人</p>
-              <div className="row">
-                <strong>{selectedContact.email}</strong>
-                <span>{selectedContact.firstName ?? '-'} {selectedContact.lastName ?? ''}</span>
-                <span>{selectedContact.company ?? '-'}</span>
-              </div>
-            </section>
-
-            <section className="panel">
-              <p className="eyebrow">AI 客户分析</p>
-              {selectedContact.enrichment ? (
-                <div className="sub-block">
-                  <div className="row">
-                    <span className={`smtp-${selectedContact.enrichment.status === 'done' ? 'success' : 'error'}`}>
-                      {selectedContact.enrichment.status === 'done' ? '✓ 已完成' : selectedContact.enrichment.status === 'in_progress' ? '⏳ 分析中' : selectedContact.enrichment.status === 'failed' ? '✗ 失败' : '○ 待处理'}
-                    </span>
-                    <span className="hint">置信度: {(selectedContact.enrichment.confidence * 100).toFixed(0)}%</span>
-                  </div>
-
-                  {selectedContact.enrichment.companyName ? (
-                    <p className="result"><strong>公司：</strong>{selectedContact.enrichment.companyName}</p>
-                  ) : null}
-                  {selectedContact.enrichment.industry ? (
-                    <p className="result"><strong>行业：</strong>{selectedContact.enrichment.industry}</p>
-                  ) : null}
-                  {selectedContact.enrichment.mainProducts.length > 0 ? (
-                    <p className="result"><strong>主营产品：</strong>{selectedContact.enrichment.mainProducts.join('、')}</p>
-                  ) : null}
-                  {selectedContact.enrichment.businessType && selectedContact.enrichment.businessType !== 'unknown' ? (
-                    <p className="result"><strong>业务类型：</strong>{selectedContact.enrichment.businessType}</p>
-                  ) : null}
-                  {selectedContact.enrichment.targetMarkets.length > 0 ? (
-                    <p className="result"><strong>目标市场：</strong>{selectedContact.enrichment.targetMarkets.join('、')}</p>
-                  ) : null}
-                  {selectedContact.enrichment.possibleNeeds.length > 0 ? (
-                    <p className="result"><strong>潜在需求：</strong>{selectedContact.enrichment.possibleNeeds.join('；')}</p>
-                  ) : null}
-                  {selectedContact.enrichment.disqualifiedReasons.length > 0 ? (
-                    <p className="result"><strong>排除原因：</strong>{selectedContact.enrichment.disqualifiedReasons.join('；')}</p>
-                  ) : null}
-                  {selectedContact.enrichment.errorMessage ? (
-                    <p className="smtp-error">{selectedContact.enrichment.errorMessage}</p>
-                  ) : null}
-                  {selectedContact.enrichment.websiteUrl ? (
-                    <p className="hint">网站：{selectedContact.enrichment.websiteUrl}</p>
-                  ) : null}
-                  {selectedContact.enrichment.enrichedAt ? (
-                    <p className="hint">分析时间：{new Date(selectedContact.enrichment.enrichedAt).toLocaleString('zh-CN')}</p>
-                  ) : null}
-                </div>
-              ) : (
-                <p className="hint">尚未分析。点击下方按钮获取客户网站信息并分析其业务。</p>
-              )}
-
-              <div className="row sub-block">
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => void handleEnrichContact(selectedContact.id)}
-                  disabled={enrichingContactId === selectedContact.id}
+      <>
+        <header className="pane-header">
+          <div>
+            <h2>Contacts</h2>
+            <p className="pane-subtitle">联系人列表</p>
+          </div>
+          <button className="ghost-btn" type="button" onClick={() => void handleSearchContacts()}>
+            刷新
+          </button>
+        </header>
+        <div className="row">
+          <input
+            className="text-input compact-input"
+            placeholder="输入关键词过滤 email / 姓名 / 公司"
+            value={contactQuery.keyword ?? ''}
+            onChange={(event) =>
+              setContactQuery((prev) => ({ ...prev, keyword: event.target.value }))
+            }
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                void handleSearchContacts();
+              }
+            }}
+          />
+          <button className="btn secondary" type="button" onClick={() => void handleSearchContacts()}>
+            搜索
+          </button>
+        </div>
+        <div className="table-wrap">
+          <table className="contacts-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>First</th>
+                <th>Last</th>
+                <th>Company</th>
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((item) => (
+                <tr
+                  key={item.id}
+                  className={selectedContactId === item.id ? 'row-selected' : ''}
+                  onClick={() => setSelectedContactId(item.id)}
                 >
-                  {enrichingContactId === selectedContact.id ? '分析中...' : (selectedContact.enrichment ? '重新分析' : '开始分析')}
-                </button>
-              </div>
-              {enrichError ? <p className="smtp-error">{enrichError}</p> : null}
-            </section>
-          </>
+                  <td>{item.email}</td>
+                  <td>{item.firstName ?? '-'}</td>
+                  <td>{item.lastName ?? '-'}</td>
+                  <td>{item.company ?? '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="hint">
+          {isContactsLoading ? '加载中...' : `总数：${contactsTotal}`}
+        </p>
+      </>
+    );
+  }
+
+  function renderContactsPane3() {
+    return (
+      <section className="panel">
+        <p className="eyebrow">联系人导入预览</p>
+        <p className="hint">每行一个联系人，格式：email,firstName,lastName,company</p>
+        <div className="row">
+          <label className="btn file-btn">
+            选择 CSV / XLSX 文件
+            <input
+              type="file"
+              accept=".csv,.tsv,.xlsx,.xls"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void handleImportFile(file);
+                }
+                event.target.value = '';
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void handlePreviewFromTextarea()}
+            disabled={isPreviewing}
+          >
+            {isPreviewing ? '预览中...' : '预览导入'}
+          </button>
+          <button
+            type="button"
+            className="btn secondary"
+            onClick={() => void handleCommitImport()}
+            disabled={isCommitting || !previewResult || previewResult.candidates.length === 0}
+          >
+            {isCommitting ? '提交中...' : '提交导入'}
+          </button>
+        </div>
+        <p className="hint">当前来源：{importSourceLabel}（{importSourceRows} 行）</p>
+        <textarea
+          className="import-textarea"
+          value={importText}
+          onChange={(event) => setImportText(event.target.value)}
+        />
+
+        {previewResult ? (
+          <div className="sub-block">
+            <p className="result">
+              预览完成：有效 {previewResult.validRows}，无效 {previewResult.invalidRows}。
+            </p>
+            <p className="hint">
+              候选 {previewResult.candidates.length} 条，
+              错误 {previewResult.errors.length} 条。
+              {previewResult.errors.length > visiblePreviewErrors.length
+                ? `（仅显示前 ${visiblePreviewErrors.length} 条）`
+                : ''}
+            </p>
+          </div>
         ) : null}
 
-        <section className="panel">
-          <p className="eyebrow">联系人导入预览</p>
-          <p className="hint">每行一个联系人，格式：email,firstName,lastName,company</p>
-          <div className="row">
-            <label className="btn file-btn">
-              选择 CSV / XLSX 文件
-              <input
-                type="file"
-                accept=".csv,.tsv,.xlsx,.xls"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  if (file) {
-                    void handleImportFile(file);
-                  }
-                  event.target.value = '';
-                }}
-              />
-            </label>
-            <button
-              type="button"
-              className="btn"
-              onClick={() => void handlePreviewFromTextarea()}
-              disabled={isPreviewing}
-            >
-              {isPreviewing ? '预览中...' : '预览导入'}
-            </button>
-            <button
-              type="button"
-              className="btn secondary"
-              onClick={() => void handleCommitImport()}
-              disabled={isCommitting || !previewResult || previewResult.candidates.length === 0}
-            >
-              {isCommitting ? '提交中...' : '提交导入'}
-            </button>
-          </div>
-          <p className="hint">当前来源：{importSourceLabel}（{importSourceRows} 行）</p>
-          <textarea
-            className="import-textarea"
-            value={importText}
-            onChange={(event) => setImportText(event.target.value)}
-          />
-
-          {previewResult ? (
-            <div className="sub-block">
-              <p className="result">
-                预览完成：有效 {previewResult.validRows}，无效 {previewResult.invalidRows}。
-              </p>
-              <p className="hint">
-                候选 {previewResult.candidates.length} 条，
-                错误 {previewResult.errors.length} 条。
-                {previewResult.errors.length > visiblePreviewErrors.length
-                  ? `（仅显示前 ${visiblePreviewErrors.length} 条）`
-                  : ''}
-              </p>
+        {previewResult && visiblePreviewErrors.length > 0 ? (
+          <div className="sub-block">
+            <p className="sub-title">预览错误明细</p>
+            <div className="table-wrap">
+              <table className="contacts-table">
+                <thead>
+                  <tr>
+                    <th>行号</th>
+                    <th>错误码</th>
+                    <th>消息</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visiblePreviewErrors.map((error, index) => (
+                    <tr key={`${error.code}-${error.rowNumber}-${index}`}>
+                      <td>{error.rowNumber}</td>
+                      <td>{error.code}</td>
+                      <td>{error.message}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ) : null}
+          </div>
+        ) : null}
 
-          {previewResult && visiblePreviewErrors.length > 0 ? (
-            <div className="sub-block">
-              <p className="sub-title">预览错误明细</p>
+        {commitResult ? (
+          <div className="sub-block">
+            <p className="result">
+              导入结果：插入 {commitResult.insertedRows}，跳过 {commitResult.skippedRows}。
+            </p>
+            {visibleCommitErrors.length > 0 ? (
               <div className="table-wrap">
                 <table className="contacts-table">
                   <thead>
@@ -554,7 +717,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {visiblePreviewErrors.map((error, index) => (
+                    {visibleCommitErrors.map((error, index) => (
                       <tr key={`${error.code}-${error.rowNumber}-${index}`}>
                         <td>{error.rowNumber}</td>
                         <td>{error.code}</td>
@@ -564,64 +727,213 @@ function App() {
                   </tbody>
                 </table>
               </div>
-            </div>
-          ) : null}
+            ) : null}
+          </div>
+        ) : null}
 
-          {commitResult ? (
+        {importError ? <p className="smtp-error">{importError}</p> : null}
+      </section>
+    );
+  }
+
+  function renderContactsPane4() {
+    if (!selectedContact) {
+      return (
+        <section className="panel">
+          <p className="eyebrow">联系人详情</p>
+          <p className="hint">从列表中选择一个联系人后，可在这里查看并执行 AI 分析。</p>
+        </section>
+      );
+    }
+
+    const enrichment = selectedContact.enrichment;
+    const matchedProducts = enrichment?.matchedProducts ?? [];
+    const emailDraft = enrichment?.emailDraft ?? null;
+
+    return (
+      <>
+        <section className="panel">
+          <p className="eyebrow">当前联系人</p>
+          <div className="row">
+            <strong>{selectedContact.email}</strong>
+            <span>{selectedContact.firstName ?? '-'} {selectedContact.lastName ?? ''}</span>
+            <span>{selectedContact.company ?? '-'}</span>
+          </div>
+        </section>
+
+        <section className="panel">
+          <p className="eyebrow">AI 客户分析</p>
+          {enrichment ? (
             <div className="sub-block">
-              <p className="result">
-                导入结果：插入 {commitResult.insertedRows}，跳过 {commitResult.skippedRows}。
-              </p>
-              {visibleCommitErrors.length > 0 ? (
-                <div className="table-wrap">
-                  <table className="contacts-table">
-                    <thead>
-                      <tr>
-                        <th>行号</th>
-                        <th>错误码</th>
-                        <th>消息</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visibleCommitErrors.map((error, index) => (
-                        <tr key={`${error.code}-${error.rowNumber}-${index}`}>
-                          <td>{error.rowNumber}</td>
-                          <td>{error.code}</td>
-                          <td>{error.message}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div className="row">
+                <span className={`smtp-${enrichment.status === 'done' ? 'success' : 'error'}`}>
+                  {enrichment.status === 'done'
+                    ? '✓ 已完成'
+                    : enrichment.status === 'in_progress'
+                      ? '⏳ 分析中'
+                      : enrichment.status === 'failed'
+                        ? '✗ 失败'
+                        : '○ 待处理'}
+                </span>
+                <span className="hint">置信度: {(enrichment.confidence * 100).toFixed(0)}%</span>
+              </div>
+
+              {enrichment.companyName ? (
+                <p className="result"><strong>公司：</strong>{enrichment.companyName}</p>
+              ) : null}
+              {enrichment.industry ? (
+                <p className="result"><strong>行业：</strong>{enrichment.industry}</p>
+              ) : null}
+              {enrichment.mainProducts.length > 0 ? (
+                <p className="result"><strong>主营产品：</strong>{enrichment.mainProducts.join('、')}</p>
+              ) : null}
+              {enrichment.businessType && enrichment.businessType !== 'unknown' ? (
+                <p className="result"><strong>业务类型：</strong>{enrichment.businessType}</p>
+              ) : null}
+              {enrichment.targetMarkets.length > 0 ? (
+                <p className="result"><strong>目标市场：</strong>{enrichment.targetMarkets.join('、')}</p>
+              ) : null}
+              {enrichment.possibleNeeds.length > 0 ? (
+                <p className="result"><strong>潜在需求：</strong>{enrichment.possibleNeeds.join('；')}</p>
+              ) : null}
+              {enrichment.disqualifiedReasons.length > 0 ? (
+                <p className="result"><strong>排除原因：</strong>{enrichment.disqualifiedReasons.join('；')}</p>
+              ) : null}
+              {matchedProducts.length > 0 ? (
+                <div className="sub-block">
+                  <p className="sub-title">推荐产品</p>
+                  {matchedProducts.map((item) => (
+                    <p key={item.productId} className="result">
+                      <strong>{item.productName}</strong>
+                      （{Math.round(item.confidence * 100)}%）：{item.matchReason}
+                    </p>
+                  ))}
                 </div>
               ) : null}
+              {emailDraft ? (
+                <div className="sub-block">
+                  <p className="sub-title">邮件草稿</p>
+                  <p className="result"><strong>主题：</strong>{emailDraft.subject}</p>
+                  <textarea className="import-textarea draft-textarea" readOnly value={emailDraft.body} />
+                  <p className="hint">
+                    生成时间：{new Date(emailDraft.generatedAt).toLocaleString('zh-CN')}
+                  </p>
+                </div>
+              ) : null}
+              {enrichment.errorMessage ? (
+                <p className="smtp-error">{enrichment.errorMessage}</p>
+              ) : null}
+              {enrichment.websiteUrl ? (
+                <p className="hint">网站：{enrichment.websiteUrl}</p>
+              ) : null}
+              {enrichment.enrichedAt ? (
+                <p className="hint">分析时间：{new Date(enrichment.enrichedAt).toLocaleString('zh-CN')}</p>
+              ) : null}
             </div>
-          ) : null}
+          ) : (
+            <p className="hint">尚未分析。点击下方按钮获取客户网站信息并分析其业务。</p>
+          )}
 
-          {importError ? <p className="smtp-error">{importError}</p> : null}
+          <div className="row sub-block">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => void handleEnrichContact(selectedContact.id)}
+              disabled={enrichingContactId === selectedContact.id}
+            >
+              {enrichingContactId === selectedContact.id ? '分析中...' : (enrichment ? '重新分析' : '开始分析')}
+            </button>
+          </div>
+          {enrichError ? <p className="smtp-error">{enrichError}</p> : null}
         </section>
+      </>
+    );
+  }
+
+  function renderSmtpPane2() {
+    return (
+      <>
+        <header className="pane-header">
+          <div>
+            <h2>SMTP</h2>
+            <p className="pane-subtitle">发件账号管理</p>
+          </div>
+        </header>
+        <section className="panel">
+          <p className="eyebrow">账号池</p>
+          <p className="hint">统一管理多个发件账号，后续用于轮询发送与频率控制。</p>
+        </section>
+      </>
+    );
+  }
+
+  function renderSmtpPane3() {
+    return <SenderAccountsPanel />;
+  }
+
+  function renderSmtpPane4() {
+    return (
+      <section className="panel">
+        <p className="eyebrow">发送策略提示</p>
+        <p className="hint">建议先准备 2-3 个可用 SMTP 账号，后续再配置轮询与限速策略。</p>
+        <p className="hint">测试连接通过后再进入批量发送模块，可以减少任务中断。</p>
       </section>
     );
   }
 
-  function renderSmtpDetail() {
+  function renderProductsPane2() {
     return (
-      <section className="pane pane-detail">
-        <SenderAccountsPanel />
+      <>
+        <header className="pane-header">
+          <div>
+            <h2>Products</h2>
+            <p className="pane-subtitle">产品库管理</p>
+          </div>
+        </header>
+        <section className="panel">
+          <p className="eyebrow">产品定位</p>
+          <p className="hint">联系人分析后，系统会根据产品库自动推荐最匹配产品。</p>
+        </section>
+      </>
+    );
+  }
+
+  function renderProductsPane3() {
+    return <ProductsPanel />;
+  }
+
+  function renderProductsPane4() {
+    return (
+      <section className="panel">
+        <p className="eyebrow">字段建议</p>
+        <p className="hint">产品描述里建议包含行业关键词、目标市场和卖点，便于 AI 匹配。</p>
+        <p className="hint">后续可将产品与邮件模板打通，实现“按客户画像自动选模板”。</p>
       </section>
     );
   }
 
-  function renderProductsDetail() {
+  function renderReportsPane2() {
     return (
-      <section className="pane pane-detail">
-        <ProductsPanel />
-      </section>
+      <>
+        <header className="pane-header">
+          <div>
+            <h2>Reports</h2>
+            <p className="pane-subtitle">Send Bulk Email</p>
+          </div>
+        </header>
+        <div className="message-list">
+          <button className="message-item active" type="button">
+            <span className="message-title">Join Us for an Unforgettable...</span>
+            <span className="message-date">10,000 · Today, 12:03 PM</span>
+          </button>
+        </div>
+      </>
     );
   }
 
-  function renderReportDetail() {
+  function renderReportsPane3() {
     return (
-      <section className="pane pane-detail report-detail">
+      <>
         <div className="report-toolbar">
           <div className="tab-header">
             {(['summary', 'message', 'recipients'] as const).map((tab) => (
@@ -670,18 +982,72 @@ function App() {
             <p className="card-sub">0 recipients</p>
           </article>
         </section>
+      </>
+    );
+  }
+
+  function renderReportsPane4() {
+    return (
+      <section className="panel">
+        <p className="eyebrow">报表说明</p>
+        <p className="hint">这里预留给后续的打开率、点击率、退订率以及按发件账号维度筛选。</p>
+        <p className="hint">后续接入真实发送任务后，这一栏会变成可筛选的统计面板。</p>
       </section>
     );
   }
 
+  function buildPaneLayout(): PaneLayout {
+    switch (activeView) {
+      case 'messages':
+        return {
+          pane2: renderMessagesPane2(),
+          pane3: renderMessagesPane3(),
+          pane4: renderMessagesPane4(),
+          pane4ClassName: 'pane messages-inspector',
+        };
+      case 'contacts':
+        return {
+          pane2: renderContactsPane2(),
+          pane3: renderContactsPane3(),
+          pane4: renderContactsPane4(),
+        };
+      case 'smtp':
+        return {
+          pane2: renderSmtpPane2(),
+          pane3: renderSmtpPane3(),
+          pane4: renderSmtpPane4(),
+        };
+      case 'products':
+        return {
+          pane2: renderProductsPane2(),
+          pane3: renderProductsPane3(),
+          pane4: renderProductsPane4(),
+        };
+      case 'reports':
+        return {
+          pane2: renderReportsPane2(),
+          pane3: renderReportsPane3(),
+          pane4: renderReportsPane4(),
+        };
+      default:
+        return {
+          pane2: null,
+          pane3: null,
+          pane4: null,
+        };
+    }
+  }
+
+  const { pane2, pane3, pane4, pane4ClassName } = buildPaneLayout();
+
   const workspaceClassName = [
     'workspace',
+    'layout-four-pane',
     themeMode === 'dark' ? 'theme-dark' : '',
-    activeView === 'messages' ? 'layout-messages' : '',
   ].join(' ').trim();
 
   return (
-    <main className={workspaceClassName} style={messageLayoutStyle}>
+    <main ref={workspaceRef} className={workspaceClassName} style={workspaceStyle}>
       <aside className="sidebar">
         <div className="window-dots" aria-hidden="true">
           <span />
@@ -747,175 +1113,36 @@ function App() {
         </button>
       </aside>
 
-      {activeView === 'messages' ? (
-        <>
-          <div
-            className="pane-splitter"
-            role="separator"
-            aria-orientation="vertical"
-            onMouseDown={(event) => handleStartDrag(0, event.clientX)}
-          />
+      <div
+        className="pane-splitter"
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={(event) => handleStartDrag(0, event.clientX)}
+      />
 
-          <section className="pane pane-list">
-            <header className="pane-header">
-              <div>
-                <h2>Messages</h2>
-                <p className="pane-subtitle">Direct Mail Project</p>
-              </div>
-              <button className="ghost-btn" type="button">＋</button>
-            </header>
-            <div className="message-list">
-              {MESSAGE_LIST.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`message-item ${item.id === activeMessageId ? 'active' : ''}`}
-                  onClick={() => setActiveMessageId(item.id)}
-                >
-                  <span className="message-title">{item.title}</span>
-                  <span className="message-date">{item.dateText}</span>
-                </button>
-              ))}
-            </div>
-          </section>
+      <section className="pane pane-list">{pane2}</section>
 
-          <div
-            className="pane-splitter"
-            role="separator"
-            aria-orientation="vertical"
-            onMouseDown={(event) => handleStartDrag(1, event.clientX)}
-          />
+      <div
+        className="pane-splitter"
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={(event) => handleStartDrag(1, event.clientX)}
+      />
 
-          <section className="pane pane-detail">{renderMessagesMain()}</section>
+      <section className={`pane pane-detail ${activeView === 'reports' ? 'report-detail' : ''}`}>
+        {pane3}
+      </section>
 
-          <div
-            className="pane-splitter"
-            role="separator"
-            aria-orientation="vertical"
-            onMouseDown={(event) => handleStartDrag(2, event.clientX)}
-          />
+      <div
+        className="pane-splitter"
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={(event) => handleStartDrag(2, event.clientX)}
+      />
 
-          {renderMessagesInspector()}
-        </>
-      ) : (
-        <>
-          <section className="pane pane-list">
-            {activeView === 'contacts' ? (
-              <>
-                <header className="pane-header">
-                  <div>
-                    <h2>Contacts</h2>
-                    <p className="pane-subtitle">联系人列表</p>
-                  </div>
-                  <button className="ghost-btn" type="button" onClick={() => void handleSearchContacts()}>
-                    刷新
-                  </button>
-                </header>
-                <div className="row">
-                  <input
-                    className="text-input compact-input"
-                    placeholder="输入关键词过滤 email / 姓名 / 公司"
-                    value={contactQuery.keyword ?? ''}
-                    onChange={(event) =>
-                      setContactQuery((prev) => ({ ...prev, keyword: event.target.value }))
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        void handleSearchContacts();
-                      }
-                    }}
-                  />
-                  <button className="btn secondary" type="button" onClick={() => void handleSearchContacts()}>
-                    搜索
-                  </button>
-                </div>
-                <div className="table-wrap">
-                  <table className="contacts-table">
-                    <thead>
-                      <tr>
-                        <th>Email</th>
-                        <th>First</th>
-                        <th>Last</th>
-                        <th>Company</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {contacts.map((item) => (
-                        <tr
-                          key={item.id}
-                          className={selectedContactId === item.id ? 'row-selected' : ''}
-                          onClick={() => setSelectedContactId(item.id)}
-                        >
-                          <td>{item.email}</td>
-                          <td>{item.firstName ?? '-'}</td>
-                          <td>{item.lastName ?? '-'}</td>
-                          <td>{item.company ?? '-'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="hint">
-                  {isContactsLoading ? '加载中...' : `总数：${contactsTotal}`}
-                </p>
-              </>
-            ) : activeView === 'smtp' ? (
-              <>
-                <header className="pane-header">
-                  <div>
-                    <h2>SMTP</h2>
-                    <p className="pane-subtitle">发件账号管理</p>
-                  </div>
-                </header>
-                <div className="panel">
-                  <p className="eyebrow">账号池</p>
-                  <p className="hint">
-                    在这里管理多个发件账号，后续用于轮询发送和频率控制。
-                  </p>
-                </div>
-              </>
-            ) : activeView === 'products' ? (
-              <>
-                <header className="pane-header">
-                  <div>
-                    <h2>Products</h2>
-                    <p className="pane-subtitle">产品库管理</p>
-                  </div>
-                </header>
-                <div className="panel">
-                  <p className="eyebrow">产品库</p>
-                  <p className="hint">
-                    导入产品资料后，AI 将用于匹配客户需求并推荐最合适的产品。
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <header className="pane-header">
-                  <div>
-                    <h2>Reports</h2>
-                    <p className="pane-subtitle">Send Bulk Email</p>
-                  </div>
-                </header>
-                <div className="message-list">
-                  <button className="message-item active" type="button">
-                    <span className="message-title">Join Us for an Unforgettable...</span>
-                    <span className="message-date">10,000 · Today, 12:03 PM</span>
-                  </button>
-                </div>
-              </>
-            )}
-          </section>
-
-          {activeView === 'contacts'
-            ? renderContactsDetail()
-            : activeView === 'smtp'
-              ? renderSmtpDetail()
-              : activeView === 'products'
-                ? renderProductsDetail()
-                : renderReportDetail()}
-        </>
-      )}
+      <section className={pane4ClassName ?? 'pane pane-inspector'}>
+        {pane4}
+      </section>
 
       <details className="dev-tools">
         <summary>开发工具</summary>

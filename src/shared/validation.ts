@@ -1,9 +1,18 @@
 import type {
+  CreateDraftFromContactsInput,
+  SendQueueEnqueueInput,
+  SendQueueListQuery,
+  SendQueueSummaryQuery,
+  SendJobStatus,
   SendSingleEmailInput,
   SenderAccountCreateInput,
   SenderAccountUpdateInput,
   TestConnectionInput,
+  UpdateContactTagsInput,
+  UpdateMailDraftInput,
 } from './types.js';
+import { MAIL_DRAFT_DEFAULTS, SEND_QUEUE_LIMITS } from './constants.js';
+import { SEND_JOB_STATUS } from './types.js';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -162,4 +171,129 @@ export function validateSendSingleEmailInput(
     subject,
     body,
   };
+}
+
+const SEND_JOB_STATUS_SET = new Set<SendJobStatus>(
+  Object.values(SEND_JOB_STATUS),
+);
+
+export function validateSendQueueEnqueueInput(
+  input: SendQueueEnqueueInput,
+): SendQueueEnqueueInput {
+  const draftId = trimRequiredText(input.draftId, 'Draft id');
+
+  const rawMaxAttempts = input.maxAttempts ?? SEND_QUEUE_LIMITS.defaultMaxAttempts;
+  if (!Number.isInteger(rawMaxAttempts)) {
+    throw new Error('Max attempts must be an integer.');
+  }
+
+  const maxAttempts = Math.min(
+    SEND_QUEUE_LIMITS.maxMaxAttempts,
+    Math.max(1, rawMaxAttempts),
+  );
+
+  return {
+    draftId,
+    maxAttempts,
+  };
+}
+
+export function validateSendQueueListQuery(
+  input: SendQueueListQuery,
+): SendQueueListQuery {
+  const statusRaw = input.status ?? 'all';
+  if (statusRaw !== 'all' && !SEND_JOB_STATUS_SET.has(statusRaw)) {
+    throw new Error(`Unsupported queue status: ${statusRaw}`);
+  }
+
+  const limitRaw = input.limit ?? 50;
+  if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > 500) {
+    throw new Error('Queue list limit must be an integer between 1 and 500.');
+  }
+
+  return {
+    status: statusRaw,
+    limit: limitRaw,
+    draftId: normalizeOptionalText(input.draftId) ?? undefined,
+  };
+}
+
+export function validateSendQueueSummaryQuery(
+  input: SendQueueSummaryQuery | undefined,
+): SendQueueSummaryQuery {
+  return {
+    draftId: normalizeOptionalText(input?.draftId) ?? undefined,
+  };
+}
+
+export function normalizeTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const tag of tags) {
+    const trimmed = String(tag).trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(trimmed);
+  }
+
+  return normalized;
+}
+
+export function validateUpdateContactTagsInput(
+  input: UpdateContactTagsInput,
+): UpdateContactTagsInput {
+  return {
+    contactId: trimRequiredText(input.contactId, 'Contact id'),
+    tags: normalizeTags(Array.isArray(input.tags) ? input.tags : []),
+  };
+}
+
+export function validateCreateDraftFromContactsInput(
+  input: CreateDraftFromContactsInput,
+): CreateDraftFromContactsInput {
+  if (!Array.isArray(input.contactIds) || input.contactIds.length === 0) {
+    throw new Error('At least one contact must be selected.');
+  }
+
+  const contactIds = input.contactIds
+    .map((item) => String(item).trim())
+    .filter((item) => item.length > 0);
+
+  if (contactIds.length === 0) {
+    throw new Error('At least one contact must be selected.');
+  }
+
+  return {
+    contactIds: [...new Set(contactIds)],
+    title: normalizeOptionalText(input.title) ?? MAIL_DRAFT_DEFAULTS.title,
+  };
+}
+
+export function validateUpdateMailDraftInput(
+  input: UpdateMailDraftInput,
+): UpdateMailDraftInput {
+  const draftId = trimRequiredText(input.draftId, 'Draft id');
+  const result: UpdateMailDraftInput = { draftId };
+
+  if (input.title !== undefined) {
+    result.title = trimRequiredText(input.title, 'Draft title');
+  }
+  if (input.subject !== undefined) {
+    result.subject = input.subject.trim();
+  }
+  if (input.htmlBody !== undefined) {
+    result.htmlBody = input.htmlBody.trim();
+  }
+  if (input.textBody !== undefined) {
+    result.textBody = input.textBody.trim();
+  }
+
+  return result;
 }

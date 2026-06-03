@@ -9,6 +9,7 @@ export interface Contact {
   firstName: string | null;
   lastName: string | null;
   company: string | null;
+  tags: string[];
   enrichment: ContactEnrichment | null;
   createdAt: TimestampMs;
   updatedAt: TimestampMs;
@@ -76,6 +77,11 @@ export interface PaginatedResult<T> {
   page: number;
   pageSize: number;
   hasNext: boolean;
+}
+
+export interface UpdateContactTagsInput {
+  contactId: ContactId;
+  tags: string[];
 }
 
 export type SenderAccountId = string;
@@ -153,6 +159,130 @@ export interface SendSingleEmailResult {
   acceptedCount: number;
   rejectedCount: number;
   response: string;
+}
+
+export type MailDraftId = string;
+
+export interface DraftRecipient {
+  contactId: ContactId;
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  company: string | null;
+  tags: string[];
+  mainProducts: string[];
+}
+
+export type DraftQueueStatus = 'idle' | 'queued' | 'sending' | 'sent' | 'failed';
+
+export interface MailDraftListItem {
+  id: MailDraftId;
+  title: string;
+  subject: string;
+  recipientCount: number;
+  queueStatus: DraftQueueStatus;
+  sendSummary: DraftSendSummary;
+  createdAt: TimestampMs;
+  updatedAt: TimestampMs;
+}
+
+export interface MailDraft {
+  id: MailDraftId;
+  title: string;
+  subject: string;
+  htmlBody: string;
+  textBody: string;
+  recipients: DraftRecipient[];
+  queueStatus: DraftQueueStatus;
+  sendSummary: DraftSendSummary;
+  createdAt: TimestampMs;
+  updatedAt: TimestampMs;
+}
+
+export interface CreateDraftFromContactsInput {
+  contactIds: ContactId[];
+  title?: string;
+}
+
+export interface UpdateMailDraftInput {
+  draftId: MailDraftId;
+  title?: string;
+  subject?: string;
+  htmlBody?: string;
+  textBody?: string;
+}
+
+export interface RemoveDraftRecipientInput {
+  draftId: MailDraftId;
+  contactId: ContactId;
+}
+
+export const SEND_JOB_STATUS = {
+  PENDING: 'pending',
+  SENDING: 'sending',
+  SENT: 'sent',
+  FAILED: 'failed',
+} as const;
+
+export type SendJobStatus = (typeof SEND_JOB_STATUS)[keyof typeof SEND_JOB_STATUS];
+
+export interface SendJob {
+  id: string;
+  draftId: MailDraftId | null;
+  to: string;
+  subject: string;
+  body: string;
+  status: SendJobStatus;
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: TimestampMs;
+  lastError: string | null;
+  lastAccountId: SenderAccountId | null;
+  messageId: string | null;
+  response: string | null;
+  sentAt: TimestampMs | null;
+  createdAt: TimestampMs;
+  updatedAt: TimestampMs;
+}
+
+export interface SendQueueEnqueueInput {
+  draftId: MailDraftId;
+  maxAttempts?: number;
+}
+
+export interface SendQueueEnqueueResult {
+  inserted: number;
+  skipped: number;
+  invalidRecipients: string[];
+}
+
+export interface SendQueueListQuery {
+  status?: SendJobStatus | 'all';
+  limit?: number;
+  draftId?: MailDraftId;
+}
+
+export interface SendQueueControlResult {
+  ok: boolean;
+  message: string;
+  summary: SendQueueSummary;
+}
+
+export interface SendQueueSummaryQuery {
+  draftId?: MailDraftId;
+}
+
+export interface SendQueueSummary {
+  paused: boolean;
+  pending: number;
+  sending: number;
+  sent: number;
+  failed: number;
+  total: number;
+}
+
+export interface DraftSendSummary extends SendQueueSummary {
+  status: DraftQueueStatus;
 }
 
 export type ProductId = string;

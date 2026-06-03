@@ -11,6 +11,7 @@ import type {
   ContactImportCandidate,
   ContactQuery,
   PaginatedResult,
+  UpdateContactTagsInput,
 } from '../shared/types.js';
 
 function toLowerSafe(value: string | null): string {
@@ -41,6 +42,7 @@ export interface ContactsRepository {
   importCandidates(candidates: ContactImportCandidate[]): void;
   findById(id: string): Contact | undefined;
   updateEnrichment(id: string, enrichment: ContactEnrichment): Contact;
+  updateTags(input: UpdateContactTagsInput): Contact;
 }
 
 export class InMemoryContactsRepository implements ContactsRepository {
@@ -101,6 +103,7 @@ export class InMemoryContactsRepository implements ContactsRepository {
         firstName: candidate.firstName,
         lastName: candidate.lastName,
         company: candidate.company,
+        tags: [],
         enrichment: null,
         createdAt: now,
         updatedAt: now,
@@ -121,6 +124,21 @@ export class InMemoryContactsRepository implements ContactsRepository {
     const updated: Contact = {
       ...this.contactsStore[index],
       enrichment,
+      updatedAt: Date.now(),
+    };
+    this.contactsStore[index] = updated;
+    return updated;
+  }
+
+  updateTags(input: UpdateContactTagsInput): Contact {
+    const index = this.contactsStore.findIndex((item) => item.id === input.contactId);
+    if (index < 0) {
+      throw new Error(`Contact not found: ${input.contactId}`);
+    }
+
+    const updated: Contact = {
+      ...this.contactsStore[index],
+      tags: [...input.tags],
       updatedAt: Date.now(),
     };
     this.contactsStore[index] = updated;

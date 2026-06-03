@@ -1,3 +1,6 @@
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+
 import nodemailer from 'nodemailer';
 
 import type {
@@ -8,25 +11,84 @@ import type {
   TestConnectionResult,
 } from '../shared/types.js';
 
-export async function testSmtpConnection(
-  input: TestConnectionInput,
-): Promise<TestConnectionResult> {
-  const startedAt = Date.now();
-  const secure = input.port === 465;
+type SmtpAuthConfig = {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  useTls: boolean;
+};
 
-  const transporter = nodemailer.createTransport({
-    host: input.host,
+type SmtpErrorLike = Error & {
+  code?: string;
+  command?: string;
+};
+
+async function resolveSmtpHost(host: string): Promise<{
+  connectionHost: string;
+  tlsServername?: string;
+}> {
+  if (isIP(host) !== 0) {
+    return { connectionHost: host };
+  }
+
+  try {
+    const { address } = await lookup(host);
+    return {
+      connectionHost: address,
+      tlsServername: host,
+    };
+  } catch {
+    // Fallback to the original host so existing behavior remains available.
+    return { connectionHost: host };
+  }
+}
+
+async function createSmtpTransport(input: SmtpAuthConfig) {
+  const secure = input.port === 465;
+  const endpoint = await resolveSmtpHost(input.host);
+
+  return nodemailer.createTransport({
+    host: endpoint.connectionHost,
     port: input.port,
     secure,
     requireTLS: input.useTls,
+    tls: endpoint.tlsServername
+      ? { servername: endpoint.tlsServername }
+      : undefined,
     auth: {
       user: input.username,
       pass: input.password,
     },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 10_000,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 20_000,
   });
+}
+
+function formatSmtpError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return 'SMTP verify failed.';
+  }
+
+  const smtpError = error as SmtpErrorLike;
+
+  if (smtpError.code === 'EAUTH') {
+    return `${smtpError.message}（Gmail 请使用应用专用密码，不是登录密码）`;
+  }
+
+  if (smtpError.code === 'ETIMEDOUT' && smtpError.command === 'CONN') {
+    return 'Connection timeout（SMTP 连通性超时，请检查网络或 DNS 设置）';
+  }
+
+  return smtpError.message;
+}
+
+export async function testSmtpConnection(
+  input: TestConnectionInput,
+): Promise<TestConnectionResult> {
+  const startedAt = Date.now();
+  const transporter = await createSmtpTransport(input);
 
   try {
     await transporter.verify();
@@ -35,10 +97,9 @@ export async function testSmtpConnection(
       message: `SMTP verify success (${Date.now() - startedAt}ms).`,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'SMTP verify failed.';
     return {
       ok: false,
-      message,
+      message: formatSmtpError(error),
     };
   } finally {
     transporter.close();
@@ -50,19 +111,12 @@ export async function sendSingleEmail(
   password: string,
   input: SendSingleEmailInput,
 ): Promise<SendSingleEmailResult> {
-  const secure = account.port === 465;
-  const transporter = nodemailer.createTransport({
+  const transporter = await createSmtpTransport({
     host: account.host,
     port: account.port,
-    secure,
-    requireTLS: account.useTls,
-    auth: {
-      user: account.username,
-      pass: password,
-    },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 10_000,
+    username: account.username,
+    password,
+    useTls: account.useTls,
   });
 
   try {

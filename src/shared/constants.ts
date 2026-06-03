@@ -23,3 +23,17 @@ export const SMTP_PORTS = [25, 465, 587, 2525] as const;
 export const PRODUCT_LIMITS = {
   maxPerFreePlan: 200,
 } as const;
+
+export const MAIL_DRAFT_DEFAULTS = {
+  title: '未命名草稿',
+  subject: '',
+  htmlBody: '<p>Hello,</p><p>Write your message here.</p>',
+  textBody: 'Hello,\n\nWrite your message here.',
+} as const;
+
+export const SEND_QUEUE_LIMITS = {
+  maxRecipientsPerEnqueue: 2000,
+  defaultMaxAttempts: 3,
+  maxMaxAttempts: 5,
+  retryBackoffMs: [30_000, 120_000, 300_000] as const,
+} as const;

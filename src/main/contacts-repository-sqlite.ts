@@ -19,8 +19,10 @@ import type {
   ContactImportCandidate,
   ContactQuery,
   PaginatedResult,
+  UpdateContactTagsInput,
 } from '../shared/types.js';
 import { ENRICHMENT_STATUS } from '../shared/types.js';
+import { normalizeTags } from '../shared/validation.js';
 import type { ContactsRepository } from './contacts-repository.js';
 
 type ContactRow = {
@@ -30,6 +32,7 @@ type ContactRow = {
   first_name: string | null;
   last_name: string | null;
   company: string | null;
+  tags_json: string | null;
   enrichment_json: string | null;
   created_at: number;
   updated_at: number;
@@ -40,6 +43,25 @@ const SORT_BY_COLUMN: Record<ContactQuery['sortBy'], string> = {
   updatedAt: 'updated_at',
   emailNormalized: 'email_normalized',
 };
+
+function normalizeTagsJson(raw: string | null): string[] {
+  if (!raw) {
+    return [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  return normalizeTags(parsed.map((item) => String(item)));
+}
 
 function normalizeEnrichment(raw: string | null): ContactEnrichment | null {
   if (!raw) {
@@ -136,6 +158,7 @@ function toContact(row: ContactRow): Contact {
     firstName: row.first_name,
     lastName: row.last_name,
     company: row.company,
+    tags: normalizeTagsJson(row.tags_json),
     enrichment: normalizeEnrichment(row.enrichment_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -189,6 +212,7 @@ export class ContactsSqliteRepository implements ContactsRepository {
         first_name TEXT,
         last_name TEXT,
         company TEXT,
+        tags_json TEXT,
         enrichment_json TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
@@ -199,6 +223,12 @@ export class ContactsSqliteRepository implements ContactsRepository {
     // migration: add enrichment_json if missing (safe re-run)
     try {
       this.db.run('ALTER TABLE contacts ADD COLUMN enrichment_json TEXT;');
+    } catch {
+      // column already exists — ignore
+    }
+
+    try {
+      this.db.run('ALTER TABLE contacts ADD COLUMN tags_json TEXT;');
     } catch {
       // column already exists — ignore
     }
@@ -237,7 +267,7 @@ export class ContactsSqliteRepository implements ContactsRepository {
     const rows = queryAll(
       this.db,
       `SELECT
-        id, email, email_normalized, first_name, last_name, company,
+        id, email, email_normalized, first_name, last_name, company, tags_json,
         enrichment_json, created_at, updated_at
       FROM contacts
       WHERE ${whereClause}
@@ -274,9 +304,22 @@ export class ContactsSqliteRepository implements ContactsRepository {
     for (const candidate of candidates) {
       const now = Date.now();
       this.db.run(
-        `INSERT INTO contacts (id, email, email_normalized, first_name, last_name, company, created_at, updated_at, deleted_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-        [randomUUID(), candidate.email, candidate.emailNormalized, candidate.firstName, candidate.lastName, candidate.company, now, now],
+        `INSERT INTO contacts (
+          id, email, email_normalized, first_name, last_name, company,
+          tags_json, created_at, updated_at, deleted_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+        [
+          randomUUID(),
+          candidate.email,
+          candidate.emailNormalized,
+          candidate.firstName,
+          candidate.lastName,
+          candidate.company,
+          JSON.stringify([]),
+          now,
+          now,
+        ],
       );
     }
     this.save();
@@ -286,7 +329,7 @@ export class ContactsSqliteRepository implements ContactsRepository {
     const row = queryOne(
       this.db,
       `SELECT
-        id, email, email_normalized, first_name, last_name, company,
+        id, email, email_normalized, first_name, last_name, company, tags_json,
         enrichment_json, created_at, updated_at
       FROM contacts
       WHERE id = ? AND deleted_at IS NULL`,
@@ -307,6 +350,22 @@ export class ContactsSqliteRepository implements ContactsRepository {
     const updated = this.findById(id);
     if (!updated) {
       throw new Error(`Contact not found: ${id}`);
+    }
+
+    return updated;
+  }
+
+  updateTags(input: UpdateContactTagsInput): Contact {
+    const now = Date.now();
+    this.db.run(
+      'UPDATE contacts SET tags_json = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+      [JSON.stringify(input.tags), now, input.contactId],
+    );
+    this.save();
+
+    const updated = this.findById(input.contactId);
+    if (!updated) {
+      throw new Error(`Contact not found: ${input.contactId}`);
     }
 
     return updated;

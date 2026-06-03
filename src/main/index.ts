@@ -10,22 +10,35 @@ import {
   type AppPingResult,
 } from '../shared/ipc-api.js';
 import type {
+  CreateDraftFromContactsInput,
   ContactImportCandidate,
   ContactsImportCommitInput,
   ContactsImportPreviewInput,
   ImportErrorCode,
   ImportPreviewResult,
   ImportResult,
+  RemoveDraftRecipientInput,
   ProductImportRow,
+  SendQueueEnqueueInput,
+  SendQueueListQuery,
+  SendQueueSummaryQuery,
   SendSingleEmailInput,
   SenderAccountCreateInput,
   SenderAccountUpdateInput,
   TestConnectionInput,
+  UpdateContactTagsInput,
+  UpdateMailDraftInput,
 } from '../shared/types.js';
 import {
   normalizeOptionalText,
+  validateCreateDraftFromContactsInput,
+  validateSendQueueSummaryQuery,
+  validateSendQueueEnqueueInput,
+  validateSendQueueListQuery,
   validateSendSingleEmailInput,
   validateTestConnectionInput,
+  validateUpdateContactTagsInput,
+  validateUpdateMailDraftInput,
   validateEmail,
 } from '../shared/validation.js';
 import {
@@ -45,6 +58,15 @@ import {
 import { EnrichmentService } from './enrichment/enrichment-service.js';
 import { JinaReaderFetcher } from './enrichment/website-fetcher.js';
 import { ClaudeLlmClient } from './enrichment/llm-client.js';
+import {
+  SendQueueSqliteRepository,
+  type SendQueueRepository,
+} from './send-queue-repository-sqlite.js';
+import { SendQueueRunner } from './send-queue-runner.js';
+import {
+  SqliteMailDraftsRepository,
+  type MailDraftsRepository,
+} from './mail-drafts-repository.js';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = path.join(currentDir, 'preload.js');
@@ -53,6 +75,9 @@ let contactsRepo: ContactsRepository | null = null;
 let smtpAccountsRepo: SmtpAccountsRepository | null = null;
 let smtpCredentialStore: CredentialStore | null = null;
 let productsRepo: ProductsRepository | null = null;
+let sendQueueRepo: SendQueueRepository | null = null;
+let sendQueueRunner: SendQueueRunner | null = null;
+let mailDraftsRepo: MailDraftsRepository | null = null;
 let enrichmentService: EnrichmentService | null = null;
 let enrichmentDisabledReason: string | null = null;
 
@@ -86,6 +111,30 @@ function getProductsRepo(): ProductsRepository {
   }
 
   return productsRepo;
+}
+
+function getSendQueueRepo(): SendQueueRepository {
+  if (!sendQueueRepo) {
+    throw new Error('Send queue repository not initialized.');
+  }
+
+  return sendQueueRepo;
+}
+
+function getSendQueueRunner(): SendQueueRunner {
+  if (!sendQueueRunner) {
+    throw new Error('Send queue runner not initialized.');
+  }
+
+  return sendQueueRunner;
+}
+
+function getMailDraftsRepo(): MailDraftsRepository {
+  if (!mailDraftsRepo) {
+    throw new Error('Mail drafts repository not initialized.');
+  }
+
+  return mailDraftsRepo;
 }
 
 function getEnrichmentService(): EnrichmentService {
@@ -265,6 +314,49 @@ function registerIpcHandlers() {
     (_event, input: ContactsImportCommitInput): ImportResult => commitContactsImport(input),
   );
 
+  ipcMain.handle(
+    IPC_CHANNELS.contactsUpdateTags,
+    (_event, input: UpdateContactTagsInput) => {
+      const validated = validateUpdateContactTagsInput(input);
+      return getContactsRepo().updateTags(validated);
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.mailDraftsList, () => getMailDraftsRepo().list());
+
+  ipcMain.handle(IPC_CHANNELS.mailDraftsGet, (_event, draftId: string) => {
+    return getMailDraftsRepo().get(draftId);
+  });
+
+  ipcMain.handle(
+    IPC_CHANNELS.mailDraftsCreateFromContacts,
+    (_event, input: CreateDraftFromContactsInput) => {
+      const validated = validateCreateDraftFromContactsInput(input);
+      const contacts = validated.contactIds.map((contactId) => {
+        const contact = getContactsRepo().findById(contactId);
+        if (!contact) {
+          throw new Error(`Contact not found: ${contactId}`);
+        }
+        return contact;
+      });
+
+      return getMailDraftsRepo().createFromContacts(validated, contacts);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.mailDraftsUpdate,
+    (_event, input: UpdateMailDraftInput) => {
+      const validated = validateUpdateMailDraftInput(input);
+      return getMailDraftsRepo().update(validated);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.mailDraftsRemoveRecipient,
+    (_event, input: RemoveDraftRecipientInput) => getMailDraftsRepo().removeRecipient(input),
+  );
+
   ipcMain.handle(IPC_CHANNELS.smtpAccountsList, () =>
     getSmtpAccountsRepo().list(),
   );
@@ -309,6 +401,34 @@ function registerIpcHandlers() {
       return sendSingleEmail(account, decryptedPassword, validated);
     },
   );
+
+  ipcMain.handle(
+    IPC_CHANNELS.sendQueueEnqueue,
+    (_event, input: SendQueueEnqueueInput) => {
+      const validated = validateSendQueueEnqueueInput(input);
+      const draft = getMailDraftsRepo().get(validated.draftId);
+      if (!draft) {
+        throw new Error(`Draft not found: ${validated.draftId}`);
+      }
+      return getSendQueueRepo().enqueueDraft(draft, validated.maxAttempts);
+    },
+  );
+
+  ipcMain.handle(
+    IPC_CHANNELS.sendQueueList,
+    (_event, input: SendQueueListQuery) => {
+      const validated = validateSendQueueListQuery(input);
+      return getSendQueueRepo().list(validated);
+    },
+  );
+
+  ipcMain.handle(IPC_CHANNELS.sendQueueSummary, (_event, input?: SendQueueSummaryQuery) => {
+    const validated = validateSendQueueSummaryQuery(input);
+    return getSendQueueRunner().summary(validated.draftId);
+  });
+  ipcMain.handle(IPC_CHANNELS.sendQueueStart, () => getSendQueueRunner().start());
+  ipcMain.handle(IPC_CHANNELS.sendQueuePause, () => getSendQueueRunner().pause());
+  ipcMain.handle(IPC_CHANNELS.sendQueueResume, () => getSendQueueRunner().resume());
 
   ipcMain.handle(IPC_CHANNELS.productsList, () => getProductsRepo().list());
 
@@ -387,6 +507,32 @@ function initProductsRepository() {
   productsRepo = new InMemoryProductsRepository();
 }
 
+async function initQueueAndDraftRepositories() {
+  const queueDbPath = path.join(app.getPath('userData'), 'flow-sender-queue.db');
+  const initSqlJs = (await import('sql.js')).default;
+  const SQL = await initSqlJs();
+
+  let sqlJsDb: SqlJsDatabase;
+  if (existsSync(queueDbPath)) {
+    const buffer = readFileSync(queueDbPath);
+    sqlJsDb = new SQL.Database(buffer);
+  } else {
+    sqlJsDb = new SQL.Database();
+  }
+
+  sendQueueRepo = new SendQueueSqliteRepository(queueDbPath, sqlJsDb);
+  mailDraftsRepo = new SqliteMailDraftsRepository(queueDbPath, sqlJsDb);
+}
+
+function initSendQueueRunner() {
+  sendQueueRunner = new SendQueueRunner(
+    getSendQueueRepo(),
+    getSmtpAccountsRepo(),
+    getSmtpCredentialStore(),
+  );
+  sendQueueRunner.bootstrap();
+}
+
 function initEnrichmentService() {
   const jinaApiKey = process.env.JINA_API_KEY ?? '';
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY ?? '';
@@ -413,6 +559,8 @@ app.whenReady().then(async () => {
   await initContactsRepository();
   initSmtpAccountsRepository();
   initProductsRepository();
+  await initQueueAndDraftRepositories();
+  initSendQueueRunner();
   initEnrichmentService();
   registerIpcHandlers();
   createWindow();

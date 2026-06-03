@@ -2,7 +2,7 @@
 
 ## 当前任务
 
-Phase 2 起步：发送队列（持久化 + 可暂停/恢复）与多账号轮转。
+Phase 2 进行中：将 `Messages` 从队列主导重构为编辑器主导，同时保留底部发送控制条。
 
 ## 已完成
 
@@ -32,14 +32,29 @@ Phase 2 起步：发送队列（持久化 + 可暂停/恢复）与多账号轮�
 - **UI**：联系人详情中 AI 分析面板（含查看/触发/重新分析按钮）✅
 - **AI enrichment 闭环**：分析完成后自动执行产品匹配 + 邮件草稿生成，并回写 enrichment ✅
 - **UI 布局**：Messages / Contacts / SMTP / Products / Reports 统一为四栏可拖拽，自适应宽度 ✅
+- **sendQueue 模块**：shared 类型、常量、IPC 合同 ✅
+- **sendQueue 模块**：SQLite 仓储（send_jobs + app_settings）✅
+- **sendQueue 模块**：main runner（暂停/恢复、轮询取任务、基础重试）✅
+- **sendQueue 模块**：已改为从 `draftId` 入队，并支持按草稿查询 summary / jobs ✅
+- **mailDrafts 模块**：本地持久化草稿 + 冻结收件人快照（SQLite）✅
+- **contacts 模块**：人工标签字段 + 标签保存 IPC / SQLite 持久化 ✅
+- **Contacts 页面**：支持单个勾选、按标签批量勾选、按主营产品批量勾选、创建草稿 ✅
+- **Messages 页面**：已恢复为编辑器主导（左草稿列表 / 中间编辑器 / 右侧收件人快照 / 底部发送条）✅
+- **Messages 页面**：邮件预览已支持适配宽度 / 缩小总览 / 原始比例 / 全屏查看 ✅
+- **Messages 页面**：`开发工具 / app.ping` 前端功能与 UI 已移除 ✅
+- **sendQueue 模块**：同一草稿下按邮箱去重入队（`draft_id + to_email` 唯一约束）✅
 - 构建验证：TypeScript 编译通过（两个配置均通过）
+- 构建验证：`pnpm lint` 通过 ✅
+- 构建验证：`PATH=/usr/local/bin:$PATH pnpm build` 通过 ✅
+- UI 启动验证：`PATH=/usr/local/bin:$PATH pnpm dev` 可启动 Vite + Electron 进程 ✅
+- UI 人工验证：`Contacts 勾选 -> 创建草稿 -> Messages 预览 -> 全屏预览 -> 队列去重` 已实际走通 ✅
 
 ## 下一步
 
-1. **发送队列**：设计 queue task schema + SQLite 持久化 + 可暂停/恢复
-2. **发件账号轮转**：多账号权重/轮询策略（按账号可用性、失败回退）
-3. **发送执行器**：将“单封发送”能力接入队列任务执行 + 基础重试
-4. **统计基础**：投递结果落库（成功/失败/时间）供 Reports 使用
+1. **补编辑器能力**：在当前 HTML 导入 + 实时预览基础上继续增强可视化编辑体验
+2. **优化预览体验细节**：继续打磨预览缩放、滚动定位、HTML 内容边界表现
+3. **补发送策略**：多账号轮转失败回退、账号健康度、限速策略
+4. **补统计**：按草稿 / 账号 / 状态沉淀 Reports 所需数据
 
 ## 环境变量
 
@@ -52,3 +67,6 @@ Phase 2 起步：发送队列（持久化 + 可暂停/恢复）与多账号轮�
 - 一次只做一个小闭环
 - 先改 shared，再改 main，再改 preload，最后改 renderer
 - 改完立刻跑构建验证
+- 当前构建环境对 Node 路径敏感：
+  - `pnpm lint` 直接可跑
+  - `pnpm build` / `pnpm dev` 建议使用 `PATH=/usr/local/bin:$PATH ...`

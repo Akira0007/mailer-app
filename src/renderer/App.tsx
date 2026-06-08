@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react';
 
@@ -33,7 +34,9 @@ import './styles/App.css';
 type ThemeMode = 'dark' | 'light';
 type PrimaryView = 'messages' | 'contacts' | 'smtp' | 'products' | 'reports';
 type ReportTab = 'summary' | 'message' | 'recipients';
-type PreviewScaleMode = 'fit-width' | 'fit-page' | 'actual';
+type PreviewScaleMode = 'fit-width' | 'fit-page' | 'custom';
+type EditorMode = 'visual' | 'source';
+type SpacingPreset = 'compact' | 'normal' | 'relaxed';
 
 const DEFAULT_PANE_WIDTHS: [number, number, number, number] = [250, 360, 920, 320];
 const IDEAL_MIN_PANE_WIDTHS: [number, number, number, number] = [200, 240, 560, 260];
@@ -78,6 +81,82 @@ const DRAFT_STATUS_LABELS: Record<string, string> = {
   sent: '已完成',
   failed: '有失败',
 };
+
+const PREVIEW_ZOOM_OPTIONS = [55, 67, 80, 90, 100, 110, 125] as const;
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function hasFullHtmlDocument(html: string): boolean {
+  return /<!doctype/i.test(html) || /<html[\s>]/i.test(html) || /<body[\s>]/i.test(html);
+}
+
+function extractEditableBodyHtml(html: string): string {
+  if (!html.trim()) {
+    return '';
+  }
+
+  if (!hasFullHtmlDocument(html)) {
+    return html;
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  return doc.body.innerHTML.trim();
+}
+
+function buildHtmlDocument(bodyHtml: string): string {
+  return [
+    '<!DOCTYPE html>',
+    '<html lang="zh-CN">',
+    '<head>',
+    '  <meta charset="UTF-8" />',
+    '  <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
+    '  <title>邮件草稿</title>',
+    '</head>',
+    `<body>${bodyHtml}</body>`,
+    '</html>',
+  ].join('\n');
+}
+
+function composeHtmlFromEditableBody(previousHtml: string, bodyHtml: string): string {
+  if (!previousHtml.trim()) {
+    return buildHtmlDocument(bodyHtml);
+  }
+
+  if (!hasFullHtmlDocument(previousHtml)) {
+    return bodyHtml;
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(previousHtml, 'text/html');
+  doc.body.innerHTML = bodyHtml;
+  const doctype = previousHtml.match(/<!doctype[^>]*>/i)?.[0] ?? '<!DOCTYPE html>';
+  return `${doctype}\n${doc.documentElement.outerHTML}`;
+}
+
+function extractTextContentFromHtml(html: string): string {
+  if (!html.trim()) {
+    return '';
+  }
+
+  const parser = new DOMParser();
+  const content = hasFullHtmlDocument(html) ? html : buildHtmlDocument(html);
+  const doc = parser.parseFromString(content, 'text/html');
+  return (doc.body.textContent ?? '')
+    .replace(/\n\s*\n/g, '\n\n')
+    .trim();
+}
+
+function docCreate(body: HTMLElement, tagName: keyof HTMLElementTagNameMap) {
+  return body.ownerDocument.createElement(tagName);
+}
 
 function sum(values: readonly number[]): number {
   return values.reduce((acc, value) => acc + value, 0);
@@ -217,6 +296,40 @@ function formatDraftStatus(summary: SendQueueSummary | null, queueStatus: string
   return `${label} · ${summary.sent}/${summary.total}`;
 }
 
+function getSpacingPresetStyles(preset: SpacingPreset) {
+  switch (preset) {
+    case 'compact':
+      return {
+        lineHeight: '1.35',
+        marginBottom: '8px',
+      };
+    case 'relaxed':
+      return {
+        lineHeight: '1.85',
+        marginBottom: '20px',
+      };
+    case 'normal':
+    default:
+      return {
+        lineHeight: '1.6',
+        marginBottom: '12px',
+      };
+  }
+}
+
+function buildCtaButtonHtml(
+  label: string,
+  url: string,
+  background: string,
+  textColor: string,
+) {
+  return [
+    '<div data-mailer-cta="inline" style="margin:28px 0; text-align:center;">',
+    `<a href="${escapeHtml(url)}" style="display:inline-block; padding:14px 24px; border-radius:999px; background:${escapeHtml(background)}; color:${escapeHtml(textColor)}; text-decoration:none; font-weight:700;">${escapeHtml(label)}</a>`,
+    '</div>',
+  ].join('');
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>('dark');
   const [activeView, setActiveView] = useState<PrimaryView>('messages');
@@ -254,6 +367,8 @@ function App() {
   const [activeDraft, setActiveDraft] = useState<MailDraft | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftSubject, setDraftSubject] = useState('');
+  // `draftHtmlBody` is the only editable source of truth for the current draft HTML.
+  // Visual editor, source editor, helper actions, and preview all rehydrate from this value.
   const [draftHtmlBody, setDraftHtmlBody] = useState('');
   const [draftTextBody, setDraftTextBody] = useState('');
   const [draftBusy, setDraftBusy] = useState(false);
@@ -267,7 +382,35 @@ function App() {
   const [queueMessage, setQueueMessage] = useState('');
   const [showQueueDetails, setShowQueueDetails] = useState(false);
   const [previewScaleMode, setPreviewScaleMode] = useState<PreviewScaleMode>('fit-width');
+  const [previewZoomPercent, setPreviewZoomPercent] = useState<number>(90);
   const [isPreviewFullscreenOpen, setIsPreviewFullscreenOpen] = useState(false);
+  const previewStageRef = useRef<HTMLDivElement | null>(null);
+  const previewModalStageRef = useRef<HTMLDivElement | null>(null);
+  const visualEditorRef = useRef<HTMLDivElement | null>(null);
+  const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastEditorModeRef = useRef<EditorMode>('visual');
+  const sourceHistoryRef = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] });
+
+  const [signatureName, setSignatureName] = useState('');
+  const [signatureRole, setSignatureRole] = useState('');
+  const [signatureCompany, setSignatureCompany] = useState('');
+  const [signatureEmail, setSignatureEmail] = useState('');
+  const [signaturePhone, setSignaturePhone] = useState('');
+  const [footerCompany, setFooterCompany] = useState('');
+  const [footerAddress, setFooterAddress] = useState('');
+  const [footerNote, setFooterNote] = useState('如不希望继续收到邮件，可点击退订。');
+  const [footerLinkText, setFooterLinkText] = useState('退订');
+  const [footerLinkUrl, setFooterLinkUrl] = useState('https://example.com/unsubscribe');
+  const [ctaLabel, setCtaLabel] = useState('了解详情');
+  const [ctaUrl, setCtaUrl] = useState('https://example.com');
+  const [ctaBackground, setCtaBackground] = useState('#0e66d9');
+  const [ctaTextColor, setCtaTextColor] = useState('#ffffff');
+  const [linkLabel, setLinkLabel] = useState('查看详情');
+  const [linkUrl, setLinkUrl] = useState('https://example.com');
+  const [imageAlt, setImageAlt] = useState('产品示意图');
+  const [imageCaption, setImageCaption] = useState('在这里替换成真实产品图或场景图');
+  const [sourceCanUndo, setSourceCanUndo] = useState(false);
+  const [sourceCanRedo, setSourceCanRedo] = useState(false);
 
   const selectedContact = useMemo(() => {
     return contacts.find((item) => item.id === selectedContactId) ?? null;
@@ -321,6 +464,22 @@ function App() {
   const previewHtml = useMemo(() => {
     return draftHtmlBody || '<p>暂无 HTML 内容，请先导入或编辑。</p>';
   }, [draftHtmlBody]);
+
+  const editableBodyHtml = useMemo(() => {
+    return extractEditableBodyHtml(draftHtmlBody);
+  }, [draftHtmlBody]);
+
+  const previewScaleFactor = useMemo(() => {
+    if (previewScaleMode === 'fit-page') {
+      return 0.72;
+    }
+
+    if (previewScaleMode === 'fit-width') {
+      return 0.92;
+    }
+
+    return previewZoomPercent / 100;
+  }, [previewScaleMode, previewZoomPercent]);
 
   function getWorkspaceWidth() {
     return workspaceRef.current?.getBoundingClientRect().width ?? window.innerWidth;
@@ -406,6 +565,22 @@ function App() {
   }, [isPreviewFullscreenOpen]);
 
   useEffect(() => {
+    const editor = visualEditorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    const isVisualEditorFocused = document.activeElement === editor;
+    if (lastEditorModeRef.current === 'visual' && isVisualEditorFocused) {
+      return;
+    }
+
+    if (editor.innerHTML !== editableBodyHtml) {
+      editor.innerHTML = editableBodyHtml;
+    }
+  }, [editableBodyHtml, activeDraftId]);
+
+  useEffect(() => {
     if (activeView === 'contacts') {
       void loadContacts(EMPTY_CONTACT_QUERY);
     }
@@ -460,6 +635,395 @@ function App() {
     setDraftSubject(draft?.subject ?? '');
     setDraftHtmlBody(draft?.htmlBody ?? '');
     setDraftTextBody(draft?.textBody ?? '');
+    sourceHistoryRef.current = { past: [], future: [] };
+    setSourceCanUndo(false);
+    setSourceCanRedo(false);
+  }
+
+  function updateDraftHtmlState(
+    nextHtml: string,
+    options?: {
+      editorMode?: EditorMode;
+      pushSourceHistory?: boolean;
+    },
+  ) {
+    const previousHtml = draftHtmlBody;
+    const hasChanged = previousHtml !== nextHtml;
+
+    if (options?.editorMode) {
+      lastEditorModeRef.current = options.editorMode;
+    }
+
+    if (options?.pushSourceHistory && hasChanged) {
+      setSourceHistoryRefState((history) => ({
+        past: [...history.past, previousHtml],
+        future: [],
+      }));
+    }
+
+    setDraftHtmlBody(nextHtml);
+    setActiveDraft((current) => {
+      if (!current || current.htmlBody === nextHtml) {
+        return current;
+      }
+
+      return {
+        ...current,
+        htmlBody: nextHtml,
+      };
+    });
+  }
+
+  function composeAndUpdateDraftBody(
+    nextBodyHtml: string,
+    options?: {
+      editorMode?: EditorMode;
+      pushSourceHistory?: boolean;
+    },
+  ) {
+    updateDraftHtmlState(
+      composeHtmlFromEditableBody(draftHtmlBody, nextBodyHtml),
+      options,
+    );
+  }
+
+  function handleVisualEditorInput() {
+    const nextBodyHtml = visualEditorRef.current?.innerHTML ?? '';
+    composeAndUpdateDraftBody(nextBodyHtml, { editorMode: 'visual' });
+  }
+
+  function handleSourceHtmlChange(nextHtml: string) {
+    updateDraftHtmlState(nextHtml, {
+      editorMode: 'source',
+      pushSourceHistory: true,
+    });
+  }
+
+  function syncTextBodyFromHtml() {
+    setDraftTextBody(extractTextContentFromHtml(draftHtmlBody));
+    setDraftMessage('已根据 HTML 更新纯文本回退。');
+    setDraftError('');
+  }
+
+  function runVisualCommand(command: string, value?: string) {
+    focusVisualEditor();
+    document.execCommand(command, false, value);
+    handleVisualEditorInput();
+  }
+
+  function getSelectedVisualBlockElement() {
+    const editor = visualEditorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) {
+      return null;
+    }
+
+    let node: Node | null = selection.getRangeAt(0).commonAncestorContainer;
+    if (node.nodeType === Node.TEXT_NODE) {
+      node = node.parentElement;
+    }
+
+    if (!(node instanceof HTMLElement)) {
+      return null;
+    }
+
+    if (!editor.contains(node)) {
+      return null;
+    }
+
+    const listContainer = node.closest('ol, ul');
+    if (listContainer instanceof HTMLElement && editor.contains(listContainer)) {
+      return listContainer;
+    }
+
+    const block = node.closest('p, h1, h2, h3, blockquote, div, section, figure');
+    if (block instanceof HTMLElement && editor.contains(block)) {
+      return block;
+    }
+
+    return node === editor ? editor : null;
+  }
+
+  function applyVisualBlock(tagName: 'p' | 'h1' | 'h2' | 'h3' | 'blockquote', label: string) {
+    runVisualCommand('formatBlock', `<${tagName}>`);
+    setDraftMessage(`已应用${label}。`);
+    setDraftError('');
+  }
+
+  function toggleBlockquote() {
+    applyVisualBlock('blockquote', '引用块');
+  }
+
+  function applyVisualAlignment(command: 'justifyLeft' | 'justifyCenter' | 'justifyRight', label: string) {
+    runVisualCommand(command);
+    setDraftMessage(`已设置为${label}。`);
+    setDraftError('');
+  }
+
+  function applyVisualList(command: 'insertUnorderedList' | 'insertOrderedList', label: string) {
+    runVisualCommand(command);
+    setDraftMessage(`已应用${label}。`);
+    setDraftError('');
+  }
+
+  function preserveVisualSelectionOnMouseDown(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+  }
+
+  function applySpacingPreset(preset: SpacingPreset, label: string) {
+    focusVisualEditor();
+    const block = getSelectedVisualBlockElement();
+    if (!block) {
+      setDraftError('请先选中一个段落、标题、引用或列表。');
+      return;
+    }
+
+    const styles = getSpacingPresetStyles(preset);
+    block.dataset.mailerSpacing = preset;
+    block.style.lineHeight = styles.lineHeight;
+    block.style.marginBottom = styles.marginBottom;
+    handleVisualEditorInput();
+    setDraftMessage(`已设置为${label}段落间距。`);
+    setDraftError('');
+  }
+
+  function focusVisualEditor() {
+    const editor = visualEditorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    editor.focus();
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount > 0) {
+      return;
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function isSelectionInsideVisualEditor() {
+    const editor = visualEditorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    return editor.contains(range.commonAncestorContainer);
+  }
+
+  function setSourceHistoryRefState(
+    updater: (history: { past: string[]; future: string[] }) => { past: string[]; future: string[] },
+  ) {
+    sourceHistoryRef.current = updater(sourceHistoryRef.current);
+    setSourceCanUndo(sourceHistoryRef.current.past.length > 0);
+    setSourceCanRedo(sourceHistoryRef.current.future.length > 0);
+  }
+
+  function handleUndo() {
+    if (lastEditorModeRef.current === 'source') {
+      const previous = sourceHistoryRef.current.past.at(-1);
+      if (previous == null) {
+        return;
+      }
+
+      sourceEditorRef.current?.focus();
+      setSourceHistoryRefState((history) => ({
+        past: history.past.slice(0, -1),
+        future: [draftHtmlBody, ...history.future],
+      }));
+      updateDraftHtmlState(previous, { editorMode: 'source' });
+      return;
+    }
+
+    focusVisualEditor();
+    document.execCommand('undo');
+    handleVisualEditorInput();
+  }
+
+  function handleRedo() {
+    if (lastEditorModeRef.current === 'source') {
+      const next = sourceHistoryRef.current.future[0];
+      if (next == null) {
+        return;
+      }
+
+      sourceEditorRef.current?.focus();
+      setSourceHistoryRefState((history) => ({
+        past: [...history.past, draftHtmlBody],
+        future: history.future.slice(1),
+      }));
+      updateDraftHtmlState(next, { editorMode: 'source' });
+      return;
+    }
+
+    focusVisualEditor();
+    document.execCommand('redo');
+    handleVisualEditorInput();
+  }
+
+  function insertLinkAtCursor() {
+    if (!linkUrl.trim()) {
+      setDraftError('请先填写链接地址。');
+      return;
+    }
+
+    lastEditorModeRef.current = 'visual';
+    focusVisualEditor();
+
+    const selection = window.getSelection();
+    const selectedText = selection?.toString().trim() ?? '';
+
+    if (isSelectionInsideVisualEditor() && selectedText) {
+      document.execCommand('createLink', false, linkUrl.trim());
+    } else {
+      const label = linkLabel.trim() || linkUrl.trim();
+      document.execCommand(
+        'insertHTML',
+        false,
+        `<a href="${escapeHtml(linkUrl.trim())}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`,
+      );
+    }
+
+    handleVisualEditorInput();
+    setDraftMessage('链接已插入到正文。');
+    setDraftError('');
+  }
+
+  function insertImagePlaceholderBlock() {
+    lastEditorModeRef.current = 'visual';
+    focusVisualEditor();
+    document.execCommand(
+      'insertHTML',
+      false,
+      [
+        '<figure data-mailer-image-placeholder="true" style="margin:24px 0; padding:20px; border:1px dashed #cbd5e1; border-radius:18px; background:#f8fafc; text-align:center;">',
+        `<div style="display:grid; place-items:center; min-height:180px; border-radius:14px; background:linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%); color:#475569; font-size:16px; font-weight:700;">${escapeHtml(imageAlt.trim() || '图片占位')}</div>`,
+        `<figcaption style="margin-top:14px; color:#64748b; font-size:14px;">${escapeHtml(imageCaption.trim() || '在这里替换成真实图片')}</figcaption>`,
+        '</figure>',
+      ].join(''),
+    );
+    handleVisualEditorInput();
+    setDraftMessage('图片占位块已插入正文。');
+    setDraftError('');
+  }
+
+  function insertCtaButtonAtCursor() {
+    lastEditorModeRef.current = 'visual';
+    focusVisualEditor();
+    document.execCommand(
+      'insertHTML',
+      false,
+      buildCtaButtonHtml(
+        ctaLabel || '了解详情',
+        ctaUrl,
+        ctaBackground,
+        ctaTextColor,
+      ),
+    );
+    handleVisualEditorInput();
+    setDraftMessage('按钮块已插入正文。');
+    setDraftError('');
+  }
+
+  function adjustPreviewZoom(direction: 'in' | 'out') {
+    const currentIndex = PREVIEW_ZOOM_OPTIONS.findIndex((value) => value === previewZoomPercent);
+    const safeIndex = currentIndex === -1
+      ? PREVIEW_ZOOM_OPTIONS.findIndex((value) => value >= previewZoomPercent)
+      : currentIndex;
+    const fallbackIndex = safeIndex === -1
+      ? PREVIEW_ZOOM_OPTIONS.length - 1
+      : safeIndex;
+    const nextIndex = direction === 'in'
+      ? Math.min(fallbackIndex + 1, PREVIEW_ZOOM_OPTIONS.length - 1)
+      : Math.max(fallbackIndex - 1, 0);
+
+    setPreviewScaleMode('custom');
+    setPreviewZoomPercent(PREVIEW_ZOOM_OPTIONS[nextIndex]);
+  }
+
+  function scrollPreview(target: 'top' | 'bottom', surface: 'inline' | 'fullscreen') {
+    const element = surface === 'inline' ? previewStageRef.current : previewModalStageRef.current;
+    if (!element) {
+      return;
+    }
+
+    element.scrollTo({
+      top: target === 'top' ? 0 : element.scrollHeight,
+      behavior: 'smooth',
+    });
+  }
+
+  function mutateEditableDraftBody(mutator: (body: HTMLElement) => void) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(buildHtmlDocument(extractEditableBodyHtml(draftHtmlBody)), 'text/html');
+    mutator(doc.body);
+    composeAndUpdateDraftBody(doc.body.innerHTML, {
+      editorMode: 'source',
+      pushSourceHistory: true,
+    });
+  }
+
+  function applySignatureBlock() {
+    mutateEditableDraftBody((body) => {
+      const block = body.querySelector<HTMLElement>('[data-mailer-signature]') ?? docCreate(body, 'section');
+      block.setAttribute('data-mailer-signature', 'true');
+      block.innerHTML = [
+        `<p style="margin:0 0 8px; font-size:16px; color:#334155;">此致，</p>`,
+        `<p style="margin:0; font-size:18px; font-weight:700; color:#0f172a;">${escapeHtml(signatureName || '你的名字')}</p>`,
+        signatureRole ? `<p style="margin:6px 0 0; color:#475569;">${escapeHtml(signatureRole)}</p>` : '',
+        signatureCompany ? `<p style="margin:4px 0 0; color:#475569;">${escapeHtml(signatureCompany)}</p>` : '',
+        signatureEmail ? `<p style="margin:4px 0 0; color:#475569;">Email: <a href="mailto:${escapeHtml(signatureEmail)}">${escapeHtml(signatureEmail)}</a></p>` : '',
+        signaturePhone ? `<p style="margin:4px 0 0; color:#475569;">Tel: ${escapeHtml(signaturePhone)}</p>` : '',
+      ].join('');
+      block.setAttribute('style', 'margin-top:32px; padding-top:20px; border-top:1px solid #dbe3ef;');
+      if (!block.parentElement) {
+        body.appendChild(block);
+      }
+    });
+    setDraftMessage('签名区已应用到正文末尾。');
+    setDraftError('');
+  }
+
+  function applyFooterBlock() {
+    mutateEditableDraftBody((body) => {
+      const block = body.querySelector<HTMLElement>('[data-mailer-footer]') ?? docCreate(body, 'footer');
+      block.setAttribute('data-mailer-footer', 'true');
+      block.innerHTML = [
+        `<p style="margin:0; font-size:14px; font-weight:700;">${escapeHtml(footerCompany || '你的公司')}</p>`,
+        footerAddress ? `<p style="margin:8px 0 0; font-size:13px;">${escapeHtml(footerAddress)}</p>` : '',
+        footerNote ? `<p style="margin:8px 0 0; font-size:13px;">${escapeHtml(footerNote)}</p>` : '',
+        footerLinkUrl
+          ? `<p style="margin:10px 0 0; font-size:13px;"><a href="${escapeHtml(footerLinkUrl)}">${escapeHtml(footerLinkText || '退订')}</a></p>`
+          : '',
+      ].join('');
+      block.setAttribute('style', 'margin-top:36px; padding:18px 20px; border-radius:14px; background:#f8fafc; color:#64748b;');
+      if (!block.parentElement) {
+        body.appendChild(block);
+      }
+    });
+    setDraftMessage('页脚区已应用到正文末尾。');
+    setDraftError('');
+  }
+
+  function applyCtaButtonBlock() {
+    mutateEditableDraftBody((body) => {
+      const wrapper = body.querySelector<HTMLElement>('[data-mailer-cta]') ?? docCreate(body, 'div');
+      wrapper.setAttribute('data-mailer-cta', 'primary');
+      wrapper.setAttribute('style', 'margin:28px 0; text-align:center;');
+      wrapper.innerHTML = `<a href="${escapeHtml(ctaUrl)}" style="display:inline-block; padding:14px 24px; border-radius:999px; background:${escapeHtml(ctaBackground)}; color:${escapeHtml(ctaTextColor)}; text-decoration:none; font-weight:700;">${escapeHtml(ctaLabel || '了解详情')}</a>`;
+      if (!wrapper.parentElement) {
+        body.appendChild(wrapper);
+      }
+    });
+    setDraftMessage('按钮样式已应用到正文中。');
+    setDraftError('');
   }
 
   async function loadContacts(query: ContactQuery) {
@@ -956,18 +1520,49 @@ function App() {
                   缩小总览
                 </button>
                 <button
-                  className={`ghost-btn ${previewScaleMode === 'actual' ? 'is-selected' : ''}`}
+                  className={`ghost-btn ${previewScaleMode === 'custom' ? 'is-selected' : ''}`}
                   type="button"
-                  onClick={() => setPreviewScaleMode('actual')}
+                  onClick={() => {
+                    setPreviewScaleMode('custom');
+                    setPreviewZoomPercent(100);
+                  }}
                 >
                   原始比例
+                </button>
+                <button className="ghost-btn" type="button" onClick={() => adjustPreviewZoom('out')}>
+                  缩小
+                </button>
+                <select
+                  className="zoom-select"
+                  value={String(previewScaleMode === 'custom' ? previewZoomPercent : Math.round(previewScaleFactor * 100))}
+                  onChange={(event) => {
+                    setPreviewScaleMode('custom');
+                    setPreviewZoomPercent(Number(event.target.value));
+                  }}
+                >
+                  {PREVIEW_ZOOM_OPTIONS.map((zoom) => (
+                    <option key={zoom} value={zoom}>{zoom}%</option>
+                  ))}
+                </select>
+                <button className="ghost-btn" type="button" onClick={() => adjustPreviewZoom('in')}>
+                  放大
+                </button>
+                <button className="ghost-btn" type="button" onClick={() => scrollPreview('top', 'inline')}>
+                  顶部
+                </button>
+                <button className="ghost-btn" type="button" onClick={() => scrollPreview('bottom', 'inline')}>
+                  底部
                 </button>
                 <button className="ghost-btn" type="button" onClick={() => setIsPreviewFullscreenOpen(true)}>
                   全屏查看
                 </button>
               </div>
             </div>
-            <div className={`preview-stage preview-stage--${previewScaleMode}`}>
+            <div
+              ref={previewStageRef}
+              className={`preview-stage preview-stage--${previewScaleMode}`}
+              style={{ '--preview-scale': previewScaleFactor } as CSSProperties}
+            >
               <div className="preview-document-shell">
                 <div className="newsletter-canvas">
                   <div
@@ -981,16 +1576,105 @@ function App() {
 
           <div className="editor-panels">
             <section className="panel">
-              <p className="eyebrow">HTML 内容</p>
-              <textarea
-                className="import-textarea html-source-textarea"
-                value={draftHtmlBody}
-                onChange={(event) => setDraftHtmlBody(event.target.value)}
-                placeholder="在这里粘贴或编辑 HTML"
+              <div className="panel-title-row">
+                <p className="eyebrow">所见即所得</p>
+                <span className="hint">直接编辑正文主体，适合改标题、段落、列表和分隔线。</span>
+              </div>
+              <div className="block-toolbar">
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualBlock('p', '正文样式')}>正文</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualBlock('h1', 'H1 标题')}>H1</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualBlock('h2', 'H2 标题')}>H2</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualBlock('h3', 'H3 标题')}>H3</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualAlignment('justifyLeft', '左对齐')}>左对齐</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualAlignment('justifyCenter', '居中')}>居中</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualAlignment('justifyRight', '右对齐')}>右对齐</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={toggleBlockquote}>引用</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => runVisualCommand('insertHorizontalRule')}>分隔线</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualList('insertUnorderedList', '无序列表')}>列表</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyVisualList('insertOrderedList', '有序列表')}>有序列表</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applySpacingPreset('compact', '紧凑')}>紧凑</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applySpacingPreset('normal', '正常')}>正常</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applySpacingPreset('relaxed', '宽松')}>宽松</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={insertCtaButtonAtCursor}>按钮</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={insertImagePlaceholderBlock}>图片</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => runVisualCommand('bold')}>加粗</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => runVisualCommand('italic')}>斜体</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={handleUndo}>撤销</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={handleRedo}>重做</button>
+              </div>
+              <div className="editor-helper-strip">
+                <div className="editor-helper-card">
+                  <span className="editor-helper-card__title">插入链接</span>
+                  <input
+                    className="text-input"
+                    value={linkLabel}
+                    onChange={(event) => setLinkLabel(event.target.value)}
+                    placeholder="链接文案"
+                  />
+                  <input
+                    className="text-input"
+                    value={linkUrl}
+                    onChange={(event) => setLinkUrl(event.target.value)}
+                    placeholder="https://example.com"
+                  />
+                  <button type="button" className="ghost-btn" onClick={insertLinkAtCursor}>插入链接</button>
+                </div>
+                <div className="editor-helper-card">
+                  <span className="editor-helper-card__title">图片占位</span>
+                  <input
+                    className="text-input"
+                    value={imageAlt}
+                    onChange={(event) => setImageAlt(event.target.value)}
+                    placeholder="占位标题"
+                  />
+                  <input
+                    className="text-input"
+                    value={imageCaption}
+                    onChange={(event) => setImageCaption(event.target.value)}
+                    placeholder="占位说明"
+                  />
+                  <button type="button" className="ghost-btn" onClick={insertImagePlaceholderBlock}>插入图片占位</button>
+                </div>
+              </div>
+              <div
+                ref={visualEditorRef}
+                className="wysiwyg-surface"
+                contentEditable
+                suppressContentEditableWarning
+                data-placeholder="在这里直接编辑邮件正文主体..."
+                onInput={() => handleVisualEditorInput()}
+                dangerouslySetInnerHTML={{ __html: editableBodyHtml }}
               />
             </section>
             <section className="panel">
-              <p className="eyebrow">纯文本回退</p>
+              <div className="panel-title-row">
+                <p className="eyebrow">HTML 源码</p>
+                <span className="hint">保留完整文档结构，适合精细调整 head / style / 组件片段。</span>
+              </div>
+              <textarea
+                ref={sourceEditorRef}
+                className="import-textarea html-source-textarea"
+                value={draftHtmlBody}
+                onChange={(event) => handleSourceHtmlChange(event.target.value)}
+                placeholder="在这里粘贴或编辑 HTML"
+              />
+              <div className="source-editor-actions">
+                <button className="ghost-btn" type="button" onClick={handleUndo} disabled={!sourceCanUndo && lastEditorModeRef.current === 'source'}>
+                  撤销源码修改
+                </button>
+                <button className="ghost-btn" type="button" onClick={handleRedo} disabled={!sourceCanRedo && lastEditorModeRef.current === 'source'}>
+                  重做源码修改
+                </button>
+                <span className="hint">源码区支持显式撤销/重做，所见即所得区也可用同样按钮回退。</span>
+              </div>
+            </section>
+            <section className="panel editor-panels__full">
+              <div className="panel-title-row">
+                <p className="eyebrow">纯文本回退</p>
+                <button className="ghost-btn" type="button" onClick={syncTextBodyFromHtml}>
+                  从 HTML 刷新
+                </button>
+              </div>
               <textarea
                 className="import-textarea plain-text-textarea"
                 value={draftTextBody}
@@ -1119,7 +1803,109 @@ function App() {
 
         <section className="panel">
           <p className="eyebrow">编辑辅助</p>
-          <p className="hint">这里保留本地编辑辅助，不做模板市场。后续会接签名、页脚、AI 生成和 HTML 清洗。</p>
+          <p className="hint">这里保留本地编辑辅助，不做模板市场。先提供签名、页脚和按钮样式三类常用能力。</p>
+          <div className="helper-group">
+            <p className="helper-group__title">签名</p>
+            <input
+              className="text-input"
+              value={signatureName}
+              onChange={(event) => setSignatureName(event.target.value)}
+              placeholder="姓名"
+            />
+            <input
+              className="text-input"
+              value={signatureRole}
+              onChange={(event) => setSignatureRole(event.target.value)}
+              placeholder="职位"
+            />
+            <input
+              className="text-input"
+              value={signatureCompany}
+              onChange={(event) => setSignatureCompany(event.target.value)}
+              placeholder="公司"
+            />
+            <input
+              className="text-input"
+              value={signatureEmail}
+              onChange={(event) => setSignatureEmail(event.target.value)}
+              placeholder="邮箱"
+            />
+            <input
+              className="text-input"
+              value={signaturePhone}
+              onChange={(event) => setSignaturePhone(event.target.value)}
+              placeholder="电话"
+            />
+            <button className="btn secondary" type="button" onClick={applySignatureBlock}>
+              应用签名
+            </button>
+          </div>
+
+          <div className="helper-group">
+            <p className="helper-group__title">页脚</p>
+            <input
+              className="text-input"
+              value={footerCompany}
+              onChange={(event) => setFooterCompany(event.target.value)}
+              placeholder="页脚公司名"
+            />
+            <input
+              className="text-input"
+              value={footerAddress}
+              onChange={(event) => setFooterAddress(event.target.value)}
+              placeholder="联系地址 / 说明"
+            />
+            <textarea
+              className="import-textarea helper-textarea"
+              value={footerNote}
+              onChange={(event) => setFooterNote(event.target.value)}
+              placeholder="页脚补充说明"
+            />
+            <input
+              className="text-input"
+              value={footerLinkText}
+              onChange={(event) => setFooterLinkText(event.target.value)}
+              placeholder="链接文字"
+            />
+            <input
+              className="text-input"
+              value={footerLinkUrl}
+              onChange={(event) => setFooterLinkUrl(event.target.value)}
+              placeholder="退订 / 官网链接"
+            />
+            <button className="btn secondary" type="button" onClick={applyFooterBlock}>
+              应用页脚
+            </button>
+          </div>
+
+          <div className="helper-group">
+            <p className="helper-group__title">按钮样式</p>
+            <input
+              className="text-input"
+              value={ctaLabel}
+              onChange={(event) => setCtaLabel(event.target.value)}
+              placeholder="按钮文案"
+            />
+            <input
+              className="text-input"
+              value={ctaUrl}
+              onChange={(event) => setCtaUrl(event.target.value)}
+              placeholder="按钮链接"
+            />
+            <div className="helper-color-row">
+              <label>
+                背景色
+                <input type="color" value={ctaBackground} onChange={(event) => setCtaBackground(event.target.value)} />
+              </label>
+              <label>
+                文字色
+                <input type="color" value={ctaTextColor} onChange={(event) => setCtaTextColor(event.target.value)} />
+              </label>
+            </div>
+            <button className="btn secondary" type="button" onClick={applyCtaButtonBlock}>
+              应用按钮
+            </button>
+          </div>
         </section>
       </>
     );
@@ -1764,18 +2550,49 @@ function App() {
                   缩小总览
                 </button>
                 <button
-                  className={`ghost-btn ${previewScaleMode === 'actual' ? 'is-selected' : ''}`}
+                  className={`ghost-btn ${previewScaleMode === 'custom' ? 'is-selected' : ''}`}
                   type="button"
-                  onClick={() => setPreviewScaleMode('actual')}
+                  onClick={() => {
+                    setPreviewScaleMode('custom');
+                    setPreviewZoomPercent(100);
+                  }}
                 >
                   原始比例
+                </button>
+                <button className="ghost-btn" type="button" onClick={() => adjustPreviewZoom('out')}>
+                  缩小
+                </button>
+                <select
+                  className="zoom-select"
+                  value={String(previewScaleMode === 'custom' ? previewZoomPercent : Math.round(previewScaleFactor * 100))}
+                  onChange={(event) => {
+                    setPreviewScaleMode('custom');
+                    setPreviewZoomPercent(Number(event.target.value));
+                  }}
+                >
+                  {PREVIEW_ZOOM_OPTIONS.map((zoom) => (
+                    <option key={zoom} value={zoom}>{zoom}%</option>
+                  ))}
+                </select>
+                <button className="ghost-btn" type="button" onClick={() => adjustPreviewZoom('in')}>
+                  放大
+                </button>
+                <button className="ghost-btn" type="button" onClick={() => scrollPreview('top', 'fullscreen')}>
+                  顶部
+                </button>
+                <button className="ghost-btn" type="button" onClick={() => scrollPreview('bottom', 'fullscreen')}>
+                  底部
                 </button>
                 <button className="ghost-btn" type="button" onClick={() => setIsPreviewFullscreenOpen(false)}>
                   关闭
                 </button>
               </div>
             </div>
-            <div className={`preview-stage preview-stage--fullscreen preview-stage--${previewScaleMode}`}>
+            <div
+              ref={previewModalStageRef}
+              className={`preview-stage preview-stage--fullscreen preview-stage--${previewScaleMode}`}
+              style={{ '--preview-scale': previewScaleFactor } as CSSProperties}
+            >
               <div className="preview-document-shell">
                 <div className="newsletter-canvas">
                   <div

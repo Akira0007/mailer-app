@@ -198,13 +198,87 @@ test('keeps visual editor, source editor, preview, and helper actions in sync', 
   await expect(sourceEditor).toContainText('<hr');
   await expect(preview.locator('hr')).toHaveCount(1);
 
+  await visualEditor.evaluate((element) => {
+    element.innerHTML = '<p>Styled block body</p>';
+    element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+    const target = element.querySelector('p') ?? element;
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    (element as HTMLElement).focus();
+  });
+  await page.getByLabel('文字颜色').fill('#dc2626');
+  await page.getByRole('button', { name: '应用文字色' }).click();
+  await expect(sourceEditor).toContainText('color: rgb(220, 38, 38)');
+  await expect
+    .poll(async () => preview.locator('p').first().evaluate((node) => window.getComputedStyle(node).color))
+    .toBe('rgb(220, 38, 38)');
+
+  await visualEditor.evaluate((element) => {
+    const target = element.querySelector('p') ?? element;
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    (element as HTMLElement).focus();
+  });
+  await page.getByRole('button', { name: '缩进', exact: true }).click();
+  await expect(sourceEditor).toContainText('padding-left: 24px');
+  await expect
+    .poll(async () => preview.locator('p').first().evaluate((node) => window.getComputedStyle(node).paddingLeft))
+    .toBe('24px');
+
+  await page.getByRole('button', { name: '取消缩进', exact: true }).click();
+  await expect(sourceEditor).not.toContainText('padding-left: 24px');
+
   await page.getByRole('button', { name: '按钮', exact: true }).click();
   await expect(sourceEditor).toContainText('data-mailer-cta="inline"');
   await expect(preview.getByRole('link', { name: '了解详情' })).toBeVisible();
 
+  await visualEditor.evaluate((element) => {
+    const target = element.querySelector('[data-mailer-cta="inline"] a') ?? element.querySelector('[data-mailer-cta] a');
+    if (!target) {
+      throw new Error('CTA anchor not found.');
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    (element as HTMLElement).focus();
+  });
+  await page.getByRole('button', { name: '按钮左', exact: true }).click();
+  await expect(sourceEditor).toContainText('text-align: left');
+  await expect
+    .poll(async () => preview.locator('[data-mailer-cta="inline"]').first().evaluate((node) => window.getComputedStyle(node).textAlign))
+    .toBe('left');
+
   await page.getByRole('button', { name: '图片', exact: true }).click();
   await expect(sourceEditor).toContainText('data-mailer-image-placeholder');
   await expect(preview).toContainText('产品示意图');
+
+  await visualEditor.evaluate((element) => {
+    const target = element.querySelector('figcaption');
+    if (!target) {
+      throw new Error('figcaption not found.');
+    }
+
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    (element as HTMLElement).focus();
+  });
+  await page.getByRole('button', { name: '说明样式', exact: true }).click();
+  await expect(sourceEditor).toContainText('data-mailer-caption-style="soft-note"');
+  await expect(preview.locator('figcaption[data-mailer-caption-style="soft-note"]')).toBeVisible();
 
   await visualEditor.evaluate((element) => {
     element.innerHTML = '<p>Ordered list body</p>';

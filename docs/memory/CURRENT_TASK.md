@@ -48,12 +48,15 @@ Phase 2 进行中：将 `Messages` 从队列主导重构为编辑器主导，同
 - **Messages 页面**：编辑器同步路径已收口到 `draftHtmlBody`，可视区 / 源码区 / 预览区围绕同一状态更新 ✅
 - **Messages 页面**：顶部语义工具条已增强（正文 / H1 / H2 / H3 / 左中右对齐 / 引用 / 分隔线 / 按钮 / 图片）✅
 - **Messages 页面**：顶部语义工具条已补有序列表与段落间距三档（紧凑 / 正常 / 宽松）✅
+- **Messages 页面**：顶部工具条已补局部样式增强（当前文字/块颜色、当前块缩进/取消缩进、当前按钮块左中右对齐、图片说明样式）✅
+- **Messages 页面**：可视编辑选区缓存已加强，颜色选择/按钮样式/图片区块操作切走焦点后仍能恢复目标选区 ✅
 - **Messages 页面**：`开发工具 / app.ping` 前端功能与 UI 已移除 ✅
 - **sendQueue 模块**：同一草稿下按邮箱去重入队（`draft_id + to_email` 唯一约束）✅
 - 构建验证：TypeScript 编译通过（两个配置均通过）
 - 构建验证：`pnpm lint` 通过 ✅
 - 构建验证：`PATH=/usr/local/bin:$PATH pnpm build` 通过 ✅
 - 自动化验证：`tests/e2e/messages-sync.spec.ts` 已覆盖顶部语义工具条与编辑器同步主链路 ✅
+- 自动化验证：`tests/e2e/messages-sync.spec.ts` 已覆盖局部文字颜色、块缩进、按钮块对齐、图片说明样式 ✅
 - UI 启动验证：`PATH=/usr/local/bin:$PATH pnpm dev` 可启动 Vite + Electron 进程 ✅
 - UI 人工验证：`Contacts 勾选 -> 创建草稿 -> Messages 预览 -> 全屏预览 -> 队列去重` 已实际走通 ✅
 

@@ -388,6 +388,7 @@ function App() {
   const previewModalStageRef = useRef<HTMLDivElement | null>(null);
   const visualEditorRef = useRef<HTMLDivElement | null>(null);
   const sourceEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const savedVisualSelectionRef = useRef<Range | null>(null);
   const lastEditorModeRef = useRef<EditorMode>('visual');
   const sourceHistoryRef = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] });
 
@@ -409,6 +410,7 @@ function App() {
   const [linkUrl, setLinkUrl] = useState('https://example.com');
   const [imageAlt, setImageAlt] = useState('产品示意图');
   const [imageCaption, setImageCaption] = useState('在这里替换成真实产品图或场景图');
+  const [selectedTextColor, setSelectedTextColor] = useState('#dc2626');
   const [sourceCanUndo, setSourceCanUndo] = useState(false);
   const [sourceCanRedo, setSourceCanRedo] = useState(false);
 
@@ -581,6 +583,30 @@ function App() {
   }, [editableBodyHtml, activeDraftId]);
 
   useEffect(() => {
+    function handleSelectionChange() {
+      const editor = visualEditorRef.current;
+      const selection = window.getSelection();
+      if (!editor || !selection || selection.rangeCount === 0) {
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      if (!editor.contains(range.commonAncestorContainer)) {
+        return;
+      }
+
+      savedVisualSelectionRef.current = range.cloneRange();
+    }
+
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, []);
+
+  useEffect(() => {
+    savedVisualSelectionRef.current = null;
+  }, [activeDraftId]);
+
+  useEffect(() => {
     if (activeView === 'contacts') {
       void loadContacts(EMPTY_CONTACT_QUERY);
     }
@@ -690,6 +716,7 @@ function App() {
   function handleVisualEditorInput() {
     const nextBodyHtml = visualEditorRef.current?.innerHTML ?? '';
     composeAndUpdateDraftBody(nextBodyHtml, { editorMode: 'visual' });
+    cacheVisualSelection();
   }
 
   function handleSourceHtmlChange(nextHtml: string) {
@@ -711,18 +738,121 @@ function App() {
     handleVisualEditorInput();
   }
 
-  function getSelectedVisualBlockElement() {
+  function cacheVisualSelection() {
     const editor = visualEditorRef.current;
     const selection = window.getSelection();
     if (!editor || !selection || selection.rangeCount === 0) {
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) {
+      return;
+    }
+
+    savedVisualSelectionRef.current = range.cloneRange();
+  }
+
+  function restoreSavedVisualSelection() {
+    const editor = visualEditorRef.current;
+    const selection = window.getSelection();
+    const savedRange = savedVisualSelectionRef.current;
+    if (!editor || !selection || !savedRange) {
+      return false;
+    }
+
+    try {
+      if (!editor.contains(savedRange.commonAncestorContainer)) {
+        savedVisualSelectionRef.current = null;
+        return false;
+      }
+
+      selection.removeAllRanges();
+      selection.addRange(savedRange.cloneRange());
+      return true;
+    } catch {
+      savedVisualSelectionRef.current = null;
+      return false;
+    }
+  }
+
+  function getActiveVisualRange() {
+    const editor = visualEditorRef.current;
+    const selection = window.getSelection();
+    if (!editor) {
       return null;
     }
 
-    let node: Node | null = selection.getRangeAt(0).commonAncestorContainer;
+    if (selection && selection.rangeCount > 0) {
+      const currentRange = selection.getRangeAt(0);
+      if (editor.contains(currentRange.commonAncestorContainer)) {
+        return currentRange;
+      }
+    }
+
+    const savedRange = savedVisualSelectionRef.current;
+    if (savedRange && editor.contains(savedRange.commonAncestorContainer)) {
+      return savedRange;
+    }
+
+    return null;
+  }
+
+  function getRangeAnchorElement(editor: HTMLDivElement, range: Range) {
+    let node: Node | null = range.startContainer;
     if (node.nodeType === Node.TEXT_NODE) {
       node = node.parentElement;
     }
 
+    if (node instanceof HTMLElement && node !== editor && editor.contains(node)) {
+      return node;
+    }
+
+    if (node === editor) {
+      const childIndex = Math.min(
+        Math.max(range.startOffset - 1, 0),
+        Math.max(editor.childNodes.length - 1, 0),
+      );
+      const child = editor.childNodes[childIndex] ?? editor.lastChild;
+      if (child?.nodeType === Node.TEXT_NODE) {
+        return child.parentElement instanceof HTMLElement ? child.parentElement : null;
+      }
+      if (child instanceof HTMLElement) {
+        return child;
+      }
+    }
+
+    return node instanceof HTMLElement ? node : null;
+  }
+
+  function getSelectedVisualElement<TElement extends HTMLElement = HTMLElement>(selector: string) {
+    const editor = visualEditorRef.current;
+    const range = getActiveVisualRange();
+    if (!editor || !range) {
+      return null;
+    }
+
+    const node = getRangeAnchorElement(editor, range);
+    if (!(node instanceof HTMLElement) || !editor.contains(node)) {
+      return null;
+    }
+
+    const matched = node.closest(selector);
+    if (matched instanceof HTMLElement && editor.contains(matched)) {
+      return matched as TElement;
+    }
+
+    return null;
+  }
+
+  function getSelectedVisualBlockElement() {
+    const editor = visualEditorRef.current;
+    const range = getActiveVisualRange();
+    if (!editor || !range) {
+      return null;
+    }
+
+    const node = getRangeAnchorElement(editor, range);
     if (!(node instanceof HTMLElement)) {
       return null;
     }
@@ -767,6 +897,7 @@ function App() {
   }
 
   function preserveVisualSelectionOnMouseDown(event: ReactMouseEvent<HTMLButtonElement>) {
+    cacheVisualSelection();
     event.preventDefault();
   }
 
@@ -796,7 +927,18 @@ function App() {
     editor.focus();
 
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount > 0) {
+    if (!selection) {
+      return;
+    }
+
+    if (
+      selection.rangeCount > 0 &&
+      editor.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      return;
+    }
+
+    if (restoreSavedVisualSelection()) {
       return;
     }
 
@@ -805,6 +947,7 @@ function App() {
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
+    cacheVisualSelection();
   }
 
   function isSelectionInsideVisualEditor() {
@@ -868,6 +1011,59 @@ function App() {
     handleVisualEditorInput();
   }
 
+  function applyTextColor() {
+    focusVisualEditor();
+    const selection = window.getSelection();
+    if (
+      selection &&
+      selection.rangeCount > 0 &&
+      !selection.isCollapsed &&
+      isSelectionInsideVisualEditor()
+    ) {
+      document.execCommand('styleWithCSS', false, 'true');
+      document.execCommand('foreColor', false, selectedTextColor);
+      handleVisualEditorInput();
+      setDraftMessage('已应用文字颜色。');
+      setDraftError('');
+      return;
+    }
+
+    const block = getSelectedVisualBlockElement();
+    if (!block || block === visualEditorRef.current) {
+      setDraftError('请先把光标放在一个段落、标题、引用或列表中。');
+      return;
+    }
+
+    block.style.color = selectedTextColor;
+    handleVisualEditorInput();
+    setDraftMessage('已应用文字颜色。');
+    setDraftError('');
+  }
+
+  function adjustBlockIndent(direction: 'in' | 'out') {
+    focusVisualEditor();
+    const block = getSelectedVisualBlockElement();
+    if (!block || block === visualEditorRef.current) {
+      setDraftError('请先选中一个段落、标题、引用或列表。');
+      return;
+    }
+
+    const currentPadding = Number.parseInt(block.style.paddingLeft || '0', 10) || 0;
+    const nextPadding = direction === 'in'
+      ? Math.min(currentPadding + 24, 120)
+      : Math.max(currentPadding - 24, 0);
+
+    if (nextPadding === 0) {
+      block.style.removeProperty('padding-left');
+    } else {
+      block.style.paddingLeft = `${nextPadding}px`;
+    }
+
+    handleVisualEditorInput();
+    setDraftMessage(direction === 'in' ? '已增加段落缩进。' : '已取消一层段落缩进。');
+    setDraftError('');
+  }
+
   function insertLinkAtCursor() {
     if (!linkUrl.trim()) {
       setDraftError('请先填写链接地址。');
@@ -898,10 +1094,7 @@ function App() {
 
   function insertImagePlaceholderBlock() {
     lastEditorModeRef.current = 'visual';
-    focusVisualEditor();
-    document.execCommand(
-      'insertHTML',
-      false,
+    insertBlockHtmlAfterCurrentBlock(
       [
         '<figure data-mailer-image-placeholder="true" style="margin:24px 0; padding:20px; border:1px dashed #cbd5e1; border-radius:18px; background:#f8fafc; text-align:center;">',
         `<div style="display:grid; place-items:center; min-height:180px; border-radius:14px; background:linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%); color:#475569; font-size:16px; font-weight:700;">${escapeHtml(imageAlt.trim() || '图片占位')}</div>`,
@@ -909,17 +1102,45 @@ function App() {
         '</figure>',
       ].join(''),
     );
-    handleVisualEditorInput();
     setDraftMessage('图片占位块已插入正文。');
     setDraftError('');
   }
 
+  function insertBlockHtmlAfterCurrentBlock(blockHtml: string) {
+    const editor = visualEditorRef.current;
+    if (!editor) {
+      return false;
+    }
+
+    focusVisualEditor();
+    const block = getSelectedVisualBlockElement();
+    const template = editor.ownerDocument.createElement('template');
+    template.innerHTML = blockHtml.trim();
+    const nextNode = template.content.firstElementChild;
+    if (!nextNode) {
+      return false;
+    }
+
+    if (block && block !== editor && block.parentElement) {
+      block.insertAdjacentElement('afterend', nextNode);
+    } else {
+      editor.appendChild(nextNode);
+    }
+
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(nextNode);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    savedVisualSelectionRef.current = range.cloneRange();
+    handleVisualEditorInput();
+    return true;
+  }
+
   function insertCtaButtonAtCursor() {
     lastEditorModeRef.current = 'visual';
-    focusVisualEditor();
-    document.execCommand(
-      'insertHTML',
-      false,
+    insertBlockHtmlAfterCurrentBlock(
       buildCtaButtonHtml(
         ctaLabel || '了解详情',
         ctaUrl,
@@ -927,8 +1148,51 @@ function App() {
         ctaTextColor,
       ),
     );
-    handleVisualEditorInput();
     setDraftMessage('按钮块已插入正文。');
+    setDraftError('');
+  }
+
+  function applyCtaAlignment(alignment: 'left' | 'center' | 'right', label: string) {
+    focusVisualEditor();
+    const wrapper = getSelectedVisualElement<HTMLElement>('[data-mailer-cta]');
+    if (!wrapper) {
+      setDraftError('请先把光标放在一个按钮块内。');
+      return;
+    }
+
+    wrapper.style.textAlign = alignment;
+    handleVisualEditorInput();
+    setDraftMessage(`已设置当前按钮块为${label}。`);
+    setDraftError('');
+  }
+
+  function getSelectedImageCaptionElement() {
+    const caption = getSelectedVisualElement<HTMLElement>('figcaption');
+    if (caption) {
+      return caption;
+    }
+
+    const figure = getSelectedVisualElement<HTMLElement>('figure[data-mailer-image-placeholder]');
+    return figure?.querySelector<HTMLElement>('figcaption') ?? null;
+  }
+
+  function applyImageCaptionStyle() {
+    focusVisualEditor();
+    const caption = getSelectedImageCaptionElement();
+    if (!caption) {
+      setDraftError('请先把光标放在图片说明文字或图片占位块中。');
+      return;
+    }
+
+    caption.dataset.mailerCaptionStyle = 'soft-note';
+    caption.style.marginTop = '14px';
+    caption.style.fontSize = '13px';
+    caption.style.color = '#64748b';
+    caption.style.fontStyle = 'italic';
+    caption.style.textAlign = 'center';
+    caption.style.letterSpacing = '0.01em';
+    handleVisualEditorInput();
+    setDraftMessage('已应用图片说明样式。');
     setDraftError('');
   }
 
@@ -1595,8 +1859,24 @@ function App() {
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applySpacingPreset('compact', '紧凑')}>紧凑</button>
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applySpacingPreset('normal', '正常')}>正常</button>
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applySpacingPreset('relaxed', '宽松')}>宽松</button>
+                <label className="toolbar-color-field">
+                  <span>文字色</span>
+                  <input
+                    aria-label="文字颜色"
+                    type="color"
+                    value={selectedTextColor}
+                    onChange={(event) => setSelectedTextColor(event.target.value)}
+                  />
+                </label>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={applyTextColor}>应用文字色</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => adjustBlockIndent('in')}>缩进</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => adjustBlockIndent('out')}>取消缩进</button>
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={insertCtaButtonAtCursor}>按钮</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyCtaAlignment('left', '左对齐')}>按钮左</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyCtaAlignment('center', '居中')}>按钮中</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => applyCtaAlignment('right', '右对齐')}>按钮右</button>
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={insertImagePlaceholderBlock}>图片</button>
+                <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={applyImageCaptionStyle}>说明样式</button>
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => runVisualCommand('bold')}>加粗</button>
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={() => runVisualCommand('italic')}>斜体</button>
                 <button type="button" onMouseDown={preserveVisualSelectionOnMouseDown} onClick={handleUndo}>撤销</button>
@@ -1643,6 +1923,9 @@ function App() {
                 suppressContentEditableWarning
                 data-placeholder="在这里直接编辑邮件正文主体..."
                 onInput={() => handleVisualEditorInput()}
+                onMouseUp={cacheVisualSelection}
+                onKeyUp={cacheVisualSelection}
+                onBlur={cacheVisualSelection}
                 dangerouslySetInnerHTML={{ __html: editableBodyHtml }}
               />
             </section>
